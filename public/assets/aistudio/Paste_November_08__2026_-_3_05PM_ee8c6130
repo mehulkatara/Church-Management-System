@@ -1,0 +1,818 @@
+Act as a senior full-stack engineer, database architect, security
+engineer, and product designer.
+
+Build a working application named:
+
+CHURCH MANAGEMENT SYSTEM
+
+This is a new project. Treat this prompt as the complete specification.
+
+The application manages multiple churches, members, donations,
+manually entered receipt numbers, member-access approvals,
+financial-year reports, and audit history.
+
+Build the actual application, database migrations, protected backend
+operations, and tests—not just a visual prototype or a project plan.
+
+Prioritize financial-record accuracy, simple mobile-friendly workflows,
+strict permissions, and low ongoing infrastructure costs.
+
+
+1. TECHNOLOGY AND DEPLOYMENT
+
+Use:
+- React + TypeScript.
+- Vite.
+- Tailwind CSS.
+- A responsive web interface with installable PWA support.
+- Cloudflare Workers Static Assets for frontend deployment.
+- Supabase PostgreSQL for persistent data.
+- Supabase Auth for authentication.
+- Supabase database functions for atomic business operations.
+- Supabase Edge Functions for server-side integrations when needed.
+- Private Supabase Storage for retained confidential files.
+
+Prepare the frontend for static deployment with correct single-page
+application routing.
+
+Do not require a separate always-running Node.js application server.
+Using Node.js for frontend development and build tooling is fine.
+
+Do not substitute Firebase or another database for Supabase.
+Do not build a native Android app or a WebView wrapper.
+Do not add Gemini API calls or AI features to normal app workflows.
+Do not send member or donation information to an AI model.
+
+Keep authoritative business data in Supabase, not localStorage,
+browser memory, or hardcoded JSON.
+
+Cache only public application-shell assets for PWA installation.
+Do not cache confidential API responses, donations, member records,
+or reports for offline access. Offline donation entry is out of scope
+for the first release.
+
+The app records donations; it does not process payments, provide
+complete accounting, or establish eligibility for tax deductions.
+
+
+2. CONFIGURATION AND HONEST SETUP STATES
+
+Use frontend configuration variables:
+
+VITE_SUPABASE_URL
+VITE_SUPABASE_PUBLISHABLE_KEY
+
+These are frontend configuration values, not privileged credentials.
+
+Never expose database passwords, Supabase secret/service-role keys,
+SMS credentials, or SMTP credentials in browser code, VITE_ variables,
+source control, logs, or downloadable files.
+
+Keep backend secrets in protected backend configuration.
+
+If Supabase is not configured:
+- Show a clear “Setup required” screen.
+- Explain which configuration values are missing.
+- Do not simulate successful registration, approvals, or saved donations.
+- Do not silently switch to a fake browser database.
+
+Provide .env.example with placeholders only.
+
+Use fictional records only in a clearly labelled, optional development
+seed. Never seed shared production passwords or automatically enable
+an insecure demo login.
+
+Do not claim external services are configured or deployed unless
+that action actually occurred.
+
+
+3. MULTI-CHURCH DATA MODEL
+
+Support multiple churches.
+
+Each church has its own:
+Members, staff assignments, access requests, donation categories,
+receiving accounts, donations, receipt registry, reports,
+notification settings, and audit records.
+
+Every church-scoped record must include church_id.
+
+Separate:
+- Authenticated user accounts.
+- Member records.
+- Church-specific roles and access.
+- Platform-wide Admin assignments.
+
+A member record must exist independently of a login account.
+
+A user may have access to multiple churches and different roles
+in different churches.
+
+Show a church switcher containing only authorized churches.
+
+Enforce church isolation in the database and backend, not just
+through frontend filters.
+
+Prevent a donation from referencing a member, category, or receiving
+account belonging to a different church.
+
+Use a normalized schema with appropriate tables for:
+churches, profiles, platform_admins, church_access, members,
+member_account_links, access_requests, donation_categories,
+receiving_accounts, donations, receipt_number_registry,
+donation_revisions, audit_logs, notifications, notification_jobs,
+notification_attempts, report_exports, and church_settings.
+
+You may refine the table names and relationships, but preserve
+the business rules and explain the final schema.
+
+
+4. AUTHENTICATION AND MEMBER APPROVAL
+
+Use Supabase email/password authentication with:
+Registration, email verification, login, logout, password reset,
+and secure session handling.
+
+Public self-registration should request:
+- Name.
+- Email.
+- Password.
+- Optional contact phone number.
+- Church selection through a minimal selector or church code.
+
+Do NOT include Village Name or Gender in self-registration.
+Do not allow self-registration to assign roles or membership status.
+
+Registration workflow:
+1. The applicant registers and verifies their email.
+2. Create a Pending access request for the selected church.
+3. Show an approval-status screen.
+4. Notify that church’s Accountants through the app.
+5. An Accountant verifies the applicant.
+6. The Accountant selects the correct existing member or creates
+   a member where appropriate.
+7. The Accountant can enter Village Name and optional Gender.
+8. Approval links the verified account to that member and grants
+   Member access only.
+
+Support Pending, Approved, Rejected, and Suspended access states.
+
+An unapproved or suspended church assignment must not grant access
+to that church’s protected records. A pending request to another
+church must not disable access already approved elsewhere.
+
+Use the stable authenticated user ID for member-account linkage.
+Do not automatically grant access because an email address matches.
+
+Within a church:
+- A member must not be linked to multiple accounts.
+- An account must not accidentally be linked to multiple members.
+
+Record the approver, decision time, and decision reason when relevant.
+
+Only Admin may assign staff roles or platform Admin privileges.
+Accountants must not grant Accountant, Collector, or Admin access.
+
+Provide a controlled, documented first-Admin setup procedure.
+Never make the first public registrant an Admin automatically.
+
+Preserve existing member information during approval unless the
+reviewer explicitly changes it. Keep approval, linkage, profile
+updates, and their audit records consistent.
+
+
+5. ROLE PERMISSIONS
+
+Deny permissions unless explicitly granted.
+
+ADMIN
+- Create and manage churches.
+- Manage staff roles and authorized church assignments.
+- Manage members, categories, receiving accounts, and donations.
+- Review access and manage account suspension.
+- Access authorized reports, audit history, and settings.
+- Has platform-wide access, subject to the exceptions below.
+- Cannot permanently delete donations or alter audit history.
+- The Admin role alone CANNOT change Active/Inactive member status.
+
+ACCOUNTANT
+- Operate within assigned churches.
+- Add and maintain members.
+- Change Active/Inactive member status with a reason.
+- Maintain Village Name and Gender.
+- Manage donation categories and receiving accounts.
+- Create, correct, and soft-delete donations with required reasons.
+- Review access requests and approve Member access.
+- Generate PDF and Excel reports.
+- View relevant church audit and notification history.
+
+COLLECTOR
+- Record new donations for existing members.
+- View other members’ donation records within the assigned church.
+- Search permitted member information.
+- Update member names, contact phone numbers, and contact emails.
+- Cannot create members.
+- Cannot edit or delete saved donations or change receipt numbers.
+- Cannot change membership status, Village Name, or Gender.
+- Cannot change roles, approve access, or change account linkages.
+- Cannot generate bulk financial or member exports.
+
+MEMBER
+- View only their own detailed donations and personal reports.
+- Update their own name, contact phone, contact email, and Gender.
+- View their own Village Name and membership status as read-only.
+- Download their own financial-year PDF statement.
+- View the permitted top-10 donation summary and their own rank.
+- Cannot view others’ detailed transactions or contact information.
+
+Contact email and authentication email are separate concepts.
+Editing contact email must not change login credentials or ownership.
+
+Login-email changes must use the verified authentication workflow.
+
+Profile updates must never change roles, account linkages, church
+assignments, access approval, or protected membership-status fields.
+
+
+6. MEMBER PROFILE AND ACCOUNTANT-ONLY STATUS
+
+Member fields:
+- Internal UUID.
+- Church ID.
+- Church-specific member number.
+- Full name.
+- Contact phone number.
+- Contact email.
+- Village Name.
+- Gender.
+- Joining date.
+- Membership status.
+- Created/updated timestamps and responsible users.
+
+MEMBERSHIP STATUS
+
+Use exactly:
+active
+inactive
+
+New member records receive a server-controlled default of active.
+
+Only a user with an explicit, current Accountant assignment for the
+member’s church may change membership status.
+
+Do not let platform Admin access implicitly satisfy this permission.
+An Admin would require a separate authorized Accountant assignment
+for the relevant church to perform this operation.
+
+An otherwise authorized non-Accountant creating a member must not
+supply an alternative initial status.
+
+Require a reason for Active-to-Inactive and Inactive-to-Active changes.
+
+Enforce this rule through protected database operations and appropriate
+column permissions—not only by hiding a control.
+
+Prevent bypass through generic updates, direct API requests,
+imports, RPC calls, or user-editable authentication metadata.
+
+Audit the old status, new status, actor, church, member, timestamp,
+and reason.
+
+Show status badges and member-list status filters.
+Only Accountants see editable membership-status controls.
+
+Membership status is separate from account-access status.
+
+Marking a member Inactive must not automatically:
+- Suspend their login.
+- Unlink their account.
+- Cancel donations.
+- Remove valid donations from financial totals or rankings.
+
+An approved inactive member retains access to their own historical
+records unless account access is separately suspended.
+
+Approving access for an existing inactive member must not silently
+reactivate that member.
+
+Show membership status during donation entry. Do not prohibit
+donations solely because membership is inactive.
+
+VILLAGE NAME
+
+Store village_name as nullable Unicode text.
+
+Exclude it from self-registration and reject attempts to populate
+it through untrusted signup metadata.
+
+Accountants can enter it during approval.
+Accountants and Admins can maintain it through authorized member
+management. Members and Collectors cannot edit it.
+
+Keep it optional. Missing village information must not block approval.
+
+Trim surrounding whitespace; treat blank values as missing.
+Preserve existing values unless explicitly changed.
+
+Include Village Name in the authorized member directory and its
+PDF/Excel exports. Provide village search or filtering.
+
+Do not expose village information on public pages, leaderboards,
+or SMS messages by default.
+
+GENDER
+
+Store gender as NULL or one of:
+male
+female
+other
+prefer_not_to_say
+
+Display friendly labels:
+Male, Female, Other, Prefer not to say.
+
+NULL means not provided and is different from Prefer not to say.
+
+Do not infer gender or choose a default.
+
+Include optional Gender entry in Accountant approval, member
+management, and the member’s own profile.
+
+Accountants and Admins may maintain it within authorized access.
+Members may update only their own Gender.
+Collectors cannot update it.
+
+Gender must not affect access, approvals, donation totals, or rankings.
+
+GENERAL MEMBER RULES
+
+Warn about potential duplicate members, but allow legitimate shared
+family phone numbers and emails.
+
+Keep phone numbers as text; support Indian and international numbers.
+
+Deactivate rather than remove members needed for donation history.
+
+Do not overwrite existing values with NULL merely because a field
+was omitted from a partial-update request.
+
+
+7. DONATION ENTRY
+
+Create a mobile-friendly “Record New Donation” form.
+
+Required:
+- Authorized church context.
+- Existing member.
+- Manually entered Receipt Number.
+- Donation Date, defaulting to today in Asia/Kolkata.
+- Donation Category.
+- Amount in INR.
+- Receiving Account.
+- Payment Method.
+
+Optional:
+- Payment Reference.
+- Notes.
+
+Keep these separate:
+
+Donation Category:
+Tithe, Offering, Building Fund, Missions, Special Collection.
+
+Receiving Account:
+Church Cash or a particular church bank account.
+
+Payment Method:
+Cash, UPI, Bank Transfer, Cheque, Other.
+
+Receipt Number:
+The church’s manually entered receipt identifier.
+
+Payment Reference:
+An external bank, UPI, cheque, or other payment reference.
+
+Use PostgreSQL numeric(14,2) for money and exact decimal handling.
+Reject non-positive amounts and unsupported decimal precision.
+Do not use floating-point arithmetic for financial totals.
+
+Store the business donation date as DATE.
+Store event timestamps with timezone support.
+Display business dates and timestamps using Asia/Kolkata.
+
+Validate inputs on both frontend and backend.
+Only active categories and receiving accounts may be selected for
+new donations; preserve their historical references after deactivation.
+
+Use server-enforced idempotency to prevent duplicate donations
+caused by repeated clicks, retries, or network interruptions.
+
+After saving, show the saved record and manually entered receipt
+number clearly before offering receipt or SMS actions.
+
+
+8. MANUAL RECEIPT NUMBERS
+
+Receipt Number is required and entered by Admin, Accountant,
+or Collector while recording the donation.
+
+Do not generate it automatically or silently replace the input.
+
+Generate a separate internal donation UUID for database relationships.
+
+Store receipt numbers as text so leading zeros remain intact.
+
+Examples:
+000125
+CH-2026-00125
+2026-27/000125
+
+Trim outer whitespace, reject blank values, and compare normalized
+receipt numbers case-insensitively.
+
+Enforce uniqueness within each church across all financial years,
+including cancelled and previously assigned numbers.
+
+Different churches may use the same receipt number.
+
+Maintain a permanent receipt-number registry with database-enforced
+uniqueness for church plus normalized receipt number.
+
+A reserved number must never be reassigned to another donation.
+
+When a duplicate is entered, prevent saving and show:
+“This receipt number already exists for this church.
+Please check the number and try again.”
+
+Only Admin or Accountant may correct a saved receipt number.
+Require a reason and retain the old and new numbers in history.
+The old number remains reserved.
+
+Perform receipt reservation, donation creation, revision/audit
+writing, and applicable notification-job creation atomically.
+
+Concurrent submissions using the same receipt number must allow
+only one successful new donation.
+
+Idempotent retries must return the original successful result
+without creating another donation or notification job.
+
+Display receipt numbers in lists, details, search, receipts,
+PDF statements, Excel exports, and donation SMS.
+
+Place the field prominently near the top of the donation form.
+Suggest a financial-year or receipt-book prefix when paper numbering
+restarts, without generating the number for the user.
+
+
+9. CORRECTIONS, SOFT DELETION, AND HISTORY
+
+Never permanently delete donations through any application role.
+
+Use fields such as:
+deleted_at
+deleted_by
+deletion_reason
+
+Label the action “Cancel / Mark as deleted”.
+
+Only Admin or authorized Accountant may correct or cancel a donation.
+Require a reason.
+
+Maintain append-only revisions with previous values, new values,
+actor, timestamp, and reason.
+
+Use concurrency protection to prevent silent overwriting of edits.
+
+Exclude soft-deleted donations from active totals and rankings.
+Provide an authorized cancelled-record view.
+
+If cancelled records are explicitly included in a report, label
+them and exclude them from active donation totals.
+
+Preserve issued receipt snapshots or versions.
+Do not silently rewrite an already-issued receipt.
+Clearly identify corrected and cancelled versions.
+
+Deactivate referenced members, categories, and accounts instead of
+removing historical relationships.
+
+
+10. FINANCIAL YEARS AND REPORTS
+
+Use the Indian financial year:
+1 April through 31 March.
+
+Example:
+FY 2026–27 means 1 April 2026 through 31 March 2027.
+
+Calculate the current financial year dynamically.
+Determine a donation’s financial year from donation_date,
+not its creation timestamp.
+
+Use shared financial-year logic across dashboards, reports,
+statements, and rankings.
+
+Admin and Accountant reports, in PDF and Excel (.xlsx):
+- Member-wise donation/credit statement.
+- Receiving-account-wise transactions.
+- Category-wise donations.
+- Detailed donation transaction register.
+- Financial-year summary.
+- Church member directory.
+
+“Credit” means an incoming recorded donation; do not imply a
+complete double-entry ledger.
+
+Support relevant filters:
+Church, financial year, date range, member, category,
+receiving account, payment method, and receipt number.
+
+Treat the member directory as a current directory with membership
+status and village filters. Do not mislabel it as a historical
+financial-year snapshot.
+
+Members can download only their own financial-year PDF statement.
+
+PDFs should contain:
+Church name, report title, period, filters, receipt numbers,
+donation dates, details, totals, generation date, and page numbers.
+
+Provide readable formatting and appropriate support for Unicode
+member and village names.
+
+Excel must use real numeric/date cells, preserve receipt numbers
+as text, and prevent formula injection from user-entered text.
+
+Report totals must match the authorized filtered data.
+
+Authorize report generation and access on the backend.
+Never trust browser-supplied member_id or church_id without checks.
+
+Retained reports must be private.
+Log report generation and server-side access/serving events.
+Do not claim the user saved a file merely because it was served.
+
+
+11. MEMBER DASHBOARD AND LEADERBOARD
+
+Show each member:
+- Selected financial year.
+- Personal donation total and count.
+- Recent donations and full permitted history.
+- Personal donation rank.
+- PDF statement download.
+
+Calculate ranks within the same church and selected financial year
+using total valid, non-deleted donations per member.
+
+Do not exclude historical donations merely because the member is
+currently inactive.
+
+Use competition ranking for equal totals:
+1, 2, 2, 4.
+
+Ranking ties depend on donation total only.
+Use a stable secondary ordering to display the top 10 entries
+without changing equal ranks.
+
+Show the current member’s rank even when outside the top 10.
+Show “Not ranked” when they have no qualifying donations.
+
+Make the shared leaderboard configurable by Admin.
+Default to masked identities and require explicit consent before
+displaying identifiable donor information.
+
+Return only approved aggregate fields through a protected operation.
+
+Never expose other members’ underlying transactions, phone numbers,
+emails, villages, or genders through the leaderboard.
+
+
+12. SMS CONFIRMATION
+
+Provide two clearly separated modes.
+
+MODE A: SEND FROM MY PHONE
+
+Implement this as the initial phone-based workflow:
+- Save the donation successfully first.
+- Show “Send SMS from my phone”.
+- Open the device’s messaging app with recipient and message where
+  supported, requiring the user to confirm sending.
+- Provide copy-number and copy-message fallbacks.
+
+Do not pretend the web app silently sends through a personal SIM.
+Do not claim it selected a SIM, sent the message, or confirmed delivery.
+Do not describe carrier messages as necessarily free.
+
+Record composer-request activity separately from delivery status.
+
+MODE B: AUTOMATIC SMS PROVIDER
+
+Provide a protected server-side provider integration path.
+Keep this mode disabled until a real supported provider is configured.
+
+Use documented provider APIs; do not invent endpoints.
+Keep credentials server-side.
+Document sender, template, and onboarding prerequisites.
+Do not purchase services or create paid accounts automatically.
+
+When enabled:
+- Create a durable notification job in the donation transaction.
+- Send only after the donation commits.
+- Process through a backend worker/scheduler that does not depend
+  on the browser remaining open.
+- Use provider-supported idempotency and controlled retry logic.
+- Reconcile uncertain submission outcomes before resending.
+- Verify provider callback authenticity.
+- SMS failure must never undo a saved donation.
+
+Track only evidence-supported states:
+not_configured, queued, submitted, delivered, failed, unknown.
+
+Do not equate API acceptance with delivery or promise exact-once
+external delivery where the provider cannot guarantee it.
+
+Message:
+“Thank you, {member_name}. {church_name} has recorded your donation
+of INR {amount} towards {category} on {donation_date}.
+Receipt: {receipt_number}.”
+
+Show an honest warning for missing/invalid phone numbers while
+preserving the donation.
+
+Provide authorized notification status and retry controls.
+
+
+13. AUDIT LOGGING AND SECURITY
+
+Audit meaningful business activity:
+Authentication events where available, approvals, account linking,
+role changes, member views/searches, profile changes, membership
+status changes, donation creation/corrections/cancellation,
+receipt corrections, reports, and SMS attempts/status updates.
+
+Define event coverage explicitly.
+Do not log every keystroke or mouse movement.
+
+Include:
+Actor, church, action, affected record, timestamp, outcome,
+request/correlation ID, relevant changes, and required reason.
+
+Generate authoritative mutation history in the database or trusted
+backend, not only through frontend logging.
+
+Route sensitive reads and exports through auditable operations.
+Prevent alternative direct-access routes from bypassing intended
+authorization and audit coverage.
+
+Distinguish browser-reported actions from authoritative backend events.
+
+Audit history is append-only for every application role, including
+Admin. Do not claim it is tamper-proof against infrastructure owners.
+
+Do not log passwords, tokens, keys, or unnecessary personal data.
+Restrict access to historical profile changes and other sensitive logs.
+
+Use:
+- RLS and explicit grants on exposed tables.
+- Protected role and account-link records.
+- Narrow, authorized operations for sensitive columns.
+- Verified server-side authentication.
+- Current church/access checks, including suspension.
+- Strict input validation and appropriate rate limits.
+- Safe errors that do not disclose other churches’ information.
+
+Never trust client-submitted roles, user IDs, or user-editable
+authentication metadata as authorization.
+
+Use privileged credentials only where necessary and perform explicit
+authorization before elevated operations.
+
+Harden privileged database functions with restricted execution grants,
+a controlled search path, and explicit actor/role checks.
+
+Use database constraints, foreign keys, indexes, and church-consistency
+checks—not only frontend validation.
+
+
+14. INTERFACE
+
+Create a clean, professional, accessible interface.
+
+Use:
+- Desktop sidebar and mobile-friendly navigation.
+- Clear church and financial-year context.
+- Readable forms, tables, filters, and pagination.
+- Searchable member/category/account selectors.
+- Indian currency formatting and unambiguous dates.
+- Accessible contrast, labels, and keyboard navigation.
+- Clear loading, empty, setup, error, and permission-denied states.
+- Confirmation dialogs for sensitive actions.
+
+Required screens:
+Login, Registration, Password Reset, Approval Status,
+Role Dashboard, Church Management, Members, Member Profile,
+Record Donation, Donations, Donation Details,
+Categories, Receiving Accounts, Access Approvals,
+Reports, Leaderboard, Audit History, Notification Status,
+My Profile, and Settings.
+
+Collectors should reach donation entry quickly.
+Members should see only personal information and the permitted
+leaderboard summary.
+
+Do not include a client-side role switcher that grants permissions.
+
+
+15. TESTS AND ACCEPTANCE CRITERIA
+
+Implement tests for business rules, backend operations, database
+permissions, concurrency, and critical user flows.
+
+Verify:
+- Pending, rejected, suspended, and cross-church access is denied.
+- Members cannot retrieve another member’s transactions or reports.
+- Collectors cannot create members or alter saved donations.
+- Contact edits cannot transfer account ownership.
+- Only an explicitly assigned Accountant can change membership status.
+- Admin access alone cannot bypass that restriction.
+- Generic updates and any implemented imports cannot bypass it.
+- Membership changes do not silently change login access.
+- Approval does not reactivate an existing inactive member.
+- Inactive members’ valid donations remain in totals.
+- Village Name is absent from signup and protected from metadata abuse.
+- Accountants can add Village Name during approval.
+- Members/Collectors cannot change Village Name.
+- Gender is optional, validates allowed values, and has correct permissions.
+- Receipt numbers are required and preserve leading zeros.
+- Case-insensitive duplicates are rejected within a church.
+- The same number can exist in different churches.
+- Old and cancelled receipt numbers remain reserved.
+- Concurrent duplicate submissions create only one donation.
+- Retries do not duplicate donations or notification jobs.
+- Corrections and cancellations preserve history.
+- Cancelled donations are excluded from active totals and rankings.
+- Financial-year boundaries work on 31 March and 1 April.
+- Reports reconcile to authorized records.
+- Rankings handle ties and church/year isolation.
+- SMS failure leaves the donation intact.
+- Confidential data is not cached for offline access.
+- Elevated credentials do not appear in the frontend bundle.
+
+Run the available tests and production build.
+Report actual results.
+Clearly identify tests blocked by missing external configuration.
+Never claim an unexecuted test passed.
+
+
+16. IMPLEMENTATION AND DELIVERY
+
+Start with a concise architecture, permission matrix, and implementation
+checklist, then build the application in working stages:
+
+A. Project structure, schema, security, authentication, and setup states.
+B. Members, accountant approval, and protected profile fields.
+C. Donation entry, manual receipts, corrections, and audit history.
+D. Dashboards, financial-year reports, and rankings.
+E. SMS workflow, deployment configuration, tests, and UI verification.
+
+Keep a visible checklist of implemented, unconfigured, and unfinished
+requirements. Do not hide missing functionality behind fake success.
+
+Deliver:
+- Frontend code.
+- Supabase SQL migrations, constraints, policies, and functions.
+- Necessary Edge Functions and notification-worker configuration.
+- Cloudflare static deployment and SPA-routing configuration.
+- PWA manifest and safe application-shell caching.
+- Automated tests.
+- Optional fictional development seed.
+- .env.example with placeholders.
+- README with build, test, setup, and deployment instructions.
+
+The README must explain:
+- Creating a Supabase development project.
+- Applying migrations.
+- Supplying frontend configuration.
+- Setting server-only secrets.
+- Configuring email verification and password-reset delivery.
+- Setting authentication site/redirect URLs for each environment.
+- Bootstrapping the first Admin and assigning the first Accountant.
+- Exporting the code to a private Git repository.
+- Deploying the frontend to Cloudflare.
+- Separating development from production.
+- Configuring optional automatic SMS.
+- Backups, restoration checks, and the pre-launch security checklist.
+
+Do not perform destructive database actions or paid provisioning
+without explicit authorization.
+
+When credentials are unavailable, complete the code and migrations,
+show honest setup-required states, and document the remaining actions.
+
+Do not claim production readiness until the security, database,
+reporting, and notification behaviour has actually been verified.
+
+Begin implementing the application now.

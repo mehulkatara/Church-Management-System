@@ -1,0 +1,17 @@
+{
+  "name": "Church Management System",
+  "short_name": "ChurchCMS",
+  "description": "Multi-church administration, verified member records, manual receipt tracking, financial-year reports, and auditable accounting.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#1e293b",
+  "icons": [
+    {
+      "src": "/church-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

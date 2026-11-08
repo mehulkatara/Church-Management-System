@@ -1,0 +1,6 @@
+{
+  "name": "Church Management System",
+  "description": "Multi-church administration, verified member records, manual receipt tracking, financial-year reports, and auditable accounting operations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
