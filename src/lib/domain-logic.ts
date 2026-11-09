@@ -385,3 +385,156 @@ export function formatINR(amount: number): string {
     maximumFractionDigits: 2,
   }).format(amount);
 }
+
+/**
+ * Validates Date of Birth according to strict domain rules:
+ * - Must be a valid calendar date format (YYYY-MM-DD)
+ * - Must not be in the future
+ * - Must not be more than 150 years in the past
+ */
+export function validateDateOfBirth(dob: string | null | undefined): {
+  valid: boolean;
+  error?: string;
+} {
+  if (!dob || typeof dob !== 'string' || !dob.trim()) {
+    return { valid: false, error: 'Date of birth is required.' };
+  }
+  const trimmed = dob.trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!match) {
+    return { valid: false, error: 'Date of birth must be in YYYY-MM-DD format.' };
+  }
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10) - 1;
+  const day = parseInt(match[3], 10);
+
+  const parsed = new Date(year, month, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month ||
+    parsed.getDate() !== day
+  ) {
+    return { valid: false, error: 'Invalid calendar date.' };
+  }
+
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  if (parsed > today) {
+    return { valid: false, error: 'Date of birth cannot be in the future.' };
+  }
+
+  const minDate = new Date();
+  minDate.setFullYear(minDate.getFullYear() - 150);
+  if (parsed < minDate) {
+    return { valid: false, error: 'Please enter a realistic date of birth.' };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Normalizes phone numbers (e.g. +91 98765 43210 -> +919876543210).
+ */
+export function normalizePhoneNumber(phone: string | null | undefined): {
+  normalized: string;
+  valid: boolean;
+  error?: string;
+} {
+  if (!phone || typeof phone !== 'string' || !phone.trim()) {
+    return { normalized: '', valid: false, error: 'Phone number is required.' };
+  }
+  const trimmed = phone.trim();
+  // Strip spaces, dashes, parentheses
+  const cleaned = trimmed.replace(/[\s\-()]/g, '');
+  if (!/^\+?[0-9]{6,15}$/.test(cleaned)) {
+    return {
+      normalized: trimmed,
+      valid: false,
+      error: 'Please enter a valid phone number (at least 6 digits).',
+    };
+  }
+  return { normalized: cleaned, valid: true };
+}
+
+export interface OnboardingProfileInput {
+  fullName: string;
+  dateOfBirth: string;
+  phone: string;
+  gender: Gender | '';
+  villageName: string;
+  churchId: string;
+  isDraft?: boolean;
+}
+
+/**
+ * Validates onboarding profile submissions.
+ * When isDraft is true, incomplete fields are allowed.
+ * When isDraft is false, all fields are strictly required.
+ */
+export function validateOnboardingProfile(
+  input: OnboardingProfileInput
+): { valid: boolean; errors: Record<string, string> } {
+  const errors: Record<string, string> = {};
+
+  if (!input.churchId || !input.churchId.trim()) {
+    errors.churchId = 'Please select a church.';
+  }
+
+  // Drafts only require church selection
+  if (input.isDraft) {
+    return { valid: Object.keys(errors).length === 0, errors };
+  }
+
+  // Full validation for final submission
+  if (!input.fullName || input.fullName.trim().length === 0) {
+    errors.fullName = 'Full name is required.';
+  }
+
+  const dobValidation = validateDateOfBirth(input.dateOfBirth);
+  if (!dobValidation.valid) {
+    errors.dateOfBirth = dobValidation.error || 'Invalid date of birth.';
+  }
+
+  const phoneValidation = normalizePhoneNumber(input.phone);
+  if (!phoneValidation.valid) {
+    errors.phone = phoneValidation.error || 'Invalid phone number.';
+  }
+
+  const genderVal = validateGender(input.gender);
+  if (!genderVal) {
+    errors.gender = 'Please select a gender option.';
+  }
+
+  if (!input.villageName || input.villageName.trim().length === 0) {
+    errors.villageName = 'Village / City Name is required.';
+  }
+
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+export type MergeChoice = 'existing' | 'applicant' | 'custom';
+
+export interface FieldMergeOption<T> {
+  existingValue: T | null;
+  applicantValue: T | null;
+  choice: MergeChoice;
+  customValue?: T | null;
+}
+
+/**
+ * Resolves a single field value based on Accountant selection
+ */
+export function resolveReviewedField<T>(
+  existingValue: T | null | undefined,
+  applicantValue: T | null | undefined,
+  choice: MergeChoice,
+  customValue?: T | null
+): T | null {
+  if (choice === 'custom' && customValue !== undefined && customValue !== null && customValue !== '') {
+    return customValue;
+  }
+  if (choice === 'applicant' && applicantValue !== undefined && applicantValue !== null && applicantValue !== '') {
+    return applicantValue;
+  }
+  return existingValue ?? null;
+}

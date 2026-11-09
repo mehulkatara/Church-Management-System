@@ -5,6 +5,7 @@ import { SetupRequiredScreen } from './components/common/SetupRequiredScreen';
 import { Navbar } from './components/common/Navbar';
 import { Sidebar, ScreenId } from './components/common/Sidebar';
 import { AuthScreen } from './components/screens/AuthScreen';
+import { CompleteProfileScreen } from './components/screens/CompleteProfileScreen';
 import { ApprovalStatusScreen } from './components/screens/ApprovalStatusScreen';
 import { DashboardScreen } from './components/screens/DashboardScreen';
 import { RecordDonationScreen } from './components/screens/RecordDonationScreen';
@@ -26,9 +27,10 @@ const MainAppContent: React.FC<{
   previewMode?: boolean;
   onExitPreview?: () => void;
 }> = ({ previewMode = false, onExitPreview }) => {
-  const { user, isLoading, activeRole, authorizedChurches, pendingRequests } = useAuth();
+  const { user, isLoading, activeRole, authorizedChurches, activeRequest, isPlatformAdmin } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenId>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
 
   if (isLoading && !previewMode) {
     return (
@@ -38,19 +40,29 @@ const MainAppContent: React.FC<{
     );
   }
 
-  // Not logged in -> Show Auth Screen
+  // Not logged in -> Show Google Sign-in Auth Screen
   if (!user && !previewMode) {
     return <AuthScreen />;
   }
 
-  // Logged in, but has pending access requests and 0 approved churches -> Show Approval Status
-  if (
-    !previewMode &&
-    authorizedChurches.length === 0 &&
-    pendingRequests.length > 0 &&
-    activeRole === 'none'
-  ) {
-    return <ApprovalStatusScreen />;
+  // Logged in via Google, but has 0 authorized churches
+  if (!previewMode && authorizedChurches.length === 0 && !isPlatformAdmin) {
+    // 1. If user clicked "Edit & Resubmit Profile", or has no request, or has an incomplete draft:
+    if (isEditingProfile || !activeRequest || activeRequest.status === 'draft') {
+      return (
+        <CompleteProfileScreen
+          existingRequest={activeRequest}
+          onSubmitted={() => setIsEditingProfile(false)}
+        />
+      );
+    }
+
+    // 2. If user's request is pending, returned_for_correction, or rejected:
+    return (
+      <ApprovalStatusScreen
+        onEditProfile={() => setIsEditingProfile(true)}
+      />
+    );
   }
 
   const renderScreen = () => {
@@ -110,7 +122,7 @@ const MainAppContent: React.FC<{
               <option value="record_donation">Record Donation</option>
               <option value="donations">Donation Registry</option>
               <option value="members">Member Directory</option>
-              <option value="approvals">Access Approvals</option>
+              <option value="approvals">Access Approvals (Side-by-Side)</option>
               <option value="categories">Categories &amp; Accounts</option>
               <option value="reports">Financial Reports</option>
               <option value="leaderboard">Leaderboard</option>
@@ -125,7 +137,7 @@ const MainAppContent: React.FC<{
             {onExitPreview && (
               <button
                 onClick={onExitPreview}
-                className="text-xs bg-slate-900 hover:bg-slate-800 text-white font-medium px-3 py-1 rounded-lg border border-slate-700 transition-colors"
+                className="text-xs bg-slate-900 hover:bg-slate-800 text-white font-medium px-3 py-1 rounded-lg border border-slate-700 transition-colors cursor-pointer"
               >
                 Exit to Setup Screen
               </button>

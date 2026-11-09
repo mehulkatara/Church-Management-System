@@ -46,6 +46,7 @@ export const MembersScreen: React.FC = () => {
   const [contactEmail, setContactEmail] = useState('');
   const [villageName, setVillageName] = useState('');
   const [gender, setGender] = useState<Gender | ''>('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
   const [joiningDate, setJoiningDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -108,6 +109,7 @@ export const MembersScreen: React.FC = () => {
         contact_email: contactEmail.trim() || null,
         village_name: canEditVillage && villageName.trim() ? villageName.trim() : null,
         gender: canEditGender && gender ? (gender as Gender) : null,
+        date_of_birth: dateOfBirth || null,
         joining_date: joiningDate,
         membership_status: 'active', // Server default
       }).select().single();
@@ -137,6 +139,7 @@ export const MembersScreen: React.FC = () => {
         full_name: fullName.trim(),
         contact_phone: contactPhone.trim() || null,
         contact_email: contactEmail.trim() || null,
+        date_of_birth: dateOfBirth || null,
       };
 
       if (canEditVillage) {
@@ -172,6 +175,7 @@ export const MembersScreen: React.FC = () => {
     setContactEmail(member.contact_email || '');
     setVillageName(member.village_name || '');
     setGender(member.gender || '');
+    setDateOfBirth(member.date_of_birth || '');
     setJoiningDate(member.joining_date);
     setFormError(null);
     setIsEditModalOpen(true);
@@ -183,6 +187,7 @@ export const MembersScreen: React.FC = () => {
     setContactEmail('');
     setVillageName('');
     setGender('');
+    setDateOfBirth('');
     setJoiningDate(new Date().toISOString().split('T')[0]);
     setFormError(null);
   };
@@ -335,7 +340,7 @@ export const MembersScreen: React.FC = () => {
                 <th className="py-3 px-4 font-mono">Member #</th>
                 <th className="py-3 px-4">Full Name</th>
                 <th className="py-3 px-4">Contact</th>
-                <th className="py-3 px-4">Village</th>
+                <th className="py-3 px-4">Village / City</th>
                 <th className="py-3 px-4">Gender</th>
                 <th className="py-3 px-4 text-center">Status</th>
                 <th className="py-3 px-4 text-right">Actions</th>
@@ -362,8 +367,11 @@ export const MembersScreen: React.FC = () => {
                       <td className="py-3 px-4 font-mono font-medium text-sky-400">
                         {m.member_number}
                       </td>
-                      <td className="py-3 px-4 font-semibold text-white">
-                        {m.full_name}
+                      <td className="py-3 px-4">
+                        <div className="font-semibold text-white">{m.full_name}</div>
+                        {m.date_of_birth && (
+                          <div className="text-[10px] font-mono text-slate-400">DOB: {m.date_of_birth}</div>
+                        )}
                       </td>
                       <td className="py-3 px-4 space-y-0.5">
                         {m.contact_phone ? (
@@ -489,22 +497,35 @@ export const MembersScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* Village Name (Accountant & Admin can maintain) */}
+            {/* Village / City Name (Accountant & Admin can maintain) */}
             <div>
               <label className="block text-slate-300 font-medium mb-1">
-                Village Name <span className="text-slate-400 font-normal">(Optional Unicode text)</span>
+                Village / City Name <span className="text-slate-400 font-normal">(Optional Unicode text)</span>
               </label>
               <input
                 type="text"
                 value={villageName}
                 onChange={(e) => setVillageName(e.target.value)}
-                placeholder="e.g. Tambaram / Thiruvanmiyur"
+                placeholder="e.g. Tambaram, Kallakurichi, or Whitefield"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
               />
             </div>
 
-            {/* Gender (Optional, explicit options) */}
+            {/* Date of Birth & Gender */}
             <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Date of Birth <span className="text-slate-400 font-normal">(Optional)</span>
+                </label>
+                <input
+                  type="date"
+                  value={dateOfBirth}
+                  max={new Date().toISOString().split('T')[0]}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
+                />
+              </div>
+
               <div>
                 <label className="block text-slate-300 font-medium mb-1">
                   Gender <span className="text-slate-400 font-normal">(Optional)</span>
@@ -521,16 +542,16 @@ export const MembersScreen: React.FC = () => {
                   <option value="prefer_not_to_say">Prefer not to say</option>
                 </select>
               </div>
+            </div>
 
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Joining Date</label>
-                <input
-                  type="date"
-                  value={joiningDate}
-                  onChange={(e) => setJoiningDate(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
-                />
-              </div>
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">Joining Date</label>
+              <input
+                type="date"
+                value={joiningDate}
+                onChange={(e) => setJoiningDate(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
+              />
             </div>
 
             <p className="text-[11px] text-slate-500 leading-relaxed">
@@ -606,37 +627,51 @@ export const MembersScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* Village Name: Admin and Accountant only; Collectors disabled */}
+            {/* Village / City Name: Admin and Accountant only; Collectors disabled */}
             <div>
               <label className="block text-slate-300 font-medium mb-1">
-                Village Name {!canEditVillage && '(Read-only for Collectors)'}
+                Village / City Name {!canEditVillage && '(Read-only for Collectors)'}
               </label>
               <input
                 type="text"
                 value={villageName}
                 onChange={(e) => setVillageName(e.target.value)}
                 disabled={!canEditVillage}
+                placeholder="e.g. Tambaram, Kallakurichi, or Whitefield"
                 className="w-full bg-slate-950 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
               />
             </div>
 
-            {/* Gender: Admin and Accountant only; Collectors disabled */}
-            <div>
-              <label className="block text-slate-300 font-medium mb-1">
-                Gender {!canEditGender && '(Read-only for Collectors)'}
-              </label>
-              <select
-                value={gender}
-                onChange={(e) => setGender(e.target.value as Gender | '')}
-                disabled={!canEditGender}
-                className="w-full bg-slate-950 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
-              >
-                <option value="">-- Not Provided (NULL) --</option>
-                <option value="male">Male</option>
-                <option value="female">Female</option>
-                <option value="other">Other</option>
-                <option value="prefer_not_to_say">Prefer not to say</option>
-              </select>
+            {/* Date of Birth & Gender in Edit Modal */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-300 font-medium mb-1">Date of Birth</label>
+                <input
+                  type="date"
+                  value={dateOfBirth}
+                  max={new Date().toISOString().split('T')[0]}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Gender {!canEditGender && '(Read-only for Collectors)'}
+                </label>
+                <select
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value as Gender | '')}
+                  disabled={!canEditGender}
+                  className="w-full bg-slate-950 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                >
+                  <option value="">-- Not Provided (NULL) --</option>
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="other">Other</option>
+                  <option value="prefer_not_to_say">Prefer not to say</option>
+                </select>
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">

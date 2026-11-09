@@ -132,10 +132,20 @@ export const MyProfileScreen: React.FC = () => {
           <div>
             <span className="text-slate-500 block flex items-center gap-1">
               <Lock className="w-3 h-3 text-amber-400" />
-              Village Name (Accountant Managed)
+              Village / City Name (Accountant Managed)
             </span>
             <span className="text-slate-300 font-medium">
               {member?.village_name || 'Not provided'}
+            </span>
+          </div>
+
+          <div>
+            <span className="text-slate-500 block flex items-center gap-1">
+              <Lock className="w-3 h-3 text-amber-400" />
+              Date of Birth
+            </span>
+            <span className="text-slate-300 font-mono">
+              {member?.date_of_birth || 'Not recorded'}
             </span>
           </div>
 

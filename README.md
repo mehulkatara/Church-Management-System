@@ -1,38 +1,34 @@
-# Church Management System
+## Google Authentication & Onboarding Workflow
 
-A multi-church administration, financial accounting, member management, and donation tracking application built with **React**, **TypeScript**, **Vite**, **Tailwind CSS**, and **Supabase PostgreSQL**.
+The Church Management System enforces a strict **Google-only authentication and Accountant-verified onboarding** architecture.
 
-Designed for financial-record accuracy, simple mobile-friendly workflows (including phone-based SMS confirmation), strict role-based access control, and low ongoing infrastructure costs with Cloudflare Workers Static Assets deployment.
+### Workflow Lifecycle
 
----
-
-## Architecture & Technology Stack
-
-- **Frontend**: React 19 + TypeScript, Vite 8, Tailwind CSS, Lucide Icons, installable PWA with public application shell caching only.
-- **Database & Auth**: Supabase PostgreSQL with Row Level Security (RLS) on all 18 tables, atomic stored procedures, and Supabase Auth.
-- **Serverless & Workers**: Supabase Edge Functions for durable SMS notification dispatching.
-- **Deployment**: Cloudflare Workers Static Assets with SPA routing (`wrangler.jsonc`, `_routes.json`, and `_headers`).
-- **Reports**: Real PDF generation (`jspdf` + `jspdf-autotable`) and Excel spreadsheets (`xlsx`) with formula injection sanitization.
-
----
-
-## Role & Permission Enforcement Matrix
-
-| Operation / Capability | Platform Admin | Church Admin | Accountant | Collector | Member |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Create & Manage Churches** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Assign Staff Roles** | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Record New Donation** | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Change Active/Inactive Member Status** | ⚠️ *(Accountant role req.)* | ⚠️ *(Accountant role req.)* | ✅ *(Reason req.)* | ❌ | ❌ |
-| **Edit Village Name** | ✅ | ✅ | ✅ | ❌ | ❌ *(Read-only)* |
-| **Edit Gender** | ✅ | ✅ | ✅ | ❌ | ✅ *(Own profile only)* |
-| **Correct / Soft-Delete Donations** | ✅ *(Reason req.)* | ✅ *(Reason req.)* | ✅ *(Reason req.)* | ❌ | ❌ |
-| **Approve Member Access Requests** | ✅ | ❌ | ✅ | ❌ | ❌ |
-| **Bulk Financial & Member Exports** | ✅ | ✅ | ✅ | ❌ | ❌ *(Own PDF only)* |
-| **View Church Audit History** | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **View All Church Donations** | ✅ | ✅ | ✅ | ✅ | ❌ *(Own only)* |
-
-> **Critical Rule**: The Admin role alone **CANNOT** change member Active/Inactive status. Only a user with an explicit, current **Accountant** assignment for that church may alter membership status, and a mandatory audit reason is enforced at the database level (`public.change_member_status`).
+```
+[Continue with Google]
+         ↓
+Supabase authenticates Google account (UUID created in auth.users)
+         ↓
+Mandatory First-Login Profile Form ("Complete Your Profile")
+  • Google login email (Read-only, verified)
+  • Full Name (Unicode text, prefilled from Google)
+  • Date of Birth (Calendar date; future/invalid dates rejected)
+  • Phone Number (+91 default country code selector)
+  • Gender (Explicit choices: Male, Female, Other, Prefer not to say)
+  • Village / City Name (Canonical locality text)
+  • Church Selection
+         ↓
+Draft saving allowed OR Submit to Church Accountant
+         ↓
+Accountant reviews in "Member Access Approvals"
+  • Side-by-side reconciliation table:
+    [Field | Existing Member Value | Applicant Value | Final Reviewed Value]
+  • Choose: Map to Existing Member OR Create New Member
+  • Concurrency protection via submission_version check
+  • Actions: Approve & Link, Return for Correction, or Reject
+         ↓
+Applicant gains verified Member access to their own statements & ranking.
+```
 
 ---
 
@@ -50,20 +46,43 @@ Designed for financial-record accuracy, simple mobile-friendly workflows (includ
 
 Open the **SQL Editor** in your Supabase project dashboard:
 
-1. **Schema & RLS**: Open and execute `supabase/migrations/20261108000001_initial_schema.sql`.
-   - Creates the 18 core tables, foreign keys, uniqueness constraints, and Row Level Security policies.
-2. **Atomic Procedures**: Open and execute `supabase/migrations/20261108000002_atomic_functions.sql`.
-   - Installs atomic business functions:
-     - `public.record_donation()`
-     - `public.correct_donation()`
-     - `public.cancel_donation()`
-     - `public.change_member_status()`
-     - `public.approve_access_request()`
-3. *(Optional Dev Testing Only)*: Execute `supabase/seed.sql` to populate sample churches, categories, accounts, and member roster. Never run seed scripts in production.
+1. **Schema & RLS**: Execute `supabase/migrations/20261108000001_initial_schema.sql`.
+   - Creates the core tables, foreign keys, uniqueness constraints, and Row Level Security policies.
+2. **Atomic Procedures**: Execute `supabase/migrations/20261108000002_atomic_functions.sql`.
+   - Installs atomic business functions (`record_donation`, `change_member_status`, `correct_donation`, `cancel_donation`).
+3. **Google Auth & Onboarding**: Execute `supabase/migrations/20261109000001_google_auth_and_onboarding.sql`.
+   - Adds `date_of_birth` to `members` and `access_requests`.
+   - Adds `submission_version`, `is_draft`, `reviewed_fields_snapshot` to `access_requests`.
+   - Installs `submit_profile_request`, `approve_access_request_v2`, and `return_access_request_for_correction`.
 
 ---
 
-## 3. Supplying Frontend Configuration
+## 3. Configuring Google OAuth Provider in Supabase
+
+1. Open your [Google Cloud Console](https://console.cloud.google.com/) &rarr; **APIs & Services** &rarr; **Credentials**.
+2. Create an **OAuth 2.0 Client ID** (Web Application).
+3. Set **Authorized redirect URIs** to your Supabase callback URL:
+   `https://<YOUR-PROJECT-REF>.supabase.co/auth/v1/callback`
+4. Copy the **Client ID** and **Client Secret**.
+5. In your Supabase Dashboard:
+   - Go to **Authentication** &rarr; **Providers** &rarr; **Google**.
+   - Toggle **Enable Google provider** to **ON**.
+   - Paste **Client ID** and **Client Secret**.
+   - Save changes.
+
+---
+
+## 4. Disabling Legacy Email/Password Authentication (Cutover)
+
+To enforce Google-only sign-in and eliminate password vectors:
+1. In the Supabase Dashboard, navigate to **Authentication** &rarr; **Providers** &rarr; **Email**.
+2. Toggle **Enable Email provider** to **OFF**.
+3. Ensure Phone and other passwordless providers are disabled.
+4. Google OAuth accounts and Google Workspace domains will remain the exclusive authentication pathway.
+
+---
+
+## 5. Supplying Frontend Configuration
 
 Create a `.env` file in the project root:
 
@@ -74,25 +93,6 @@ VITE_SUPABASE_PUBLISHABLE_KEY="your-anon-publishable-key-here"
 ```
 
 *Note: Never expose Supabase `service_role` keys, database passwords, or SMS API keys in frontend code or repository `.env` files.*
-
----
-
-## 4. Setting Server-Only Secrets
-
-For Supabase Edge Functions (such as the SMS notification worker in `supabase/functions/notification-worker`):
-1. In the Supabase Dashboard, go to **Project Settings** &rarr; **Secrets** (or **Vault**).
-2. Configure:
-   - `SUPABASE_SERVICE_ROLE_KEY`: Service role secret for background jobs.
-   - `SMS_PROVIDER_API_KEY`: API token for your registered telecom gateway.
-   - `SMS_PROVIDER_SENDER_ID`: Registered DLT sender ID (e.g. `CHURCH`).
-
----
-
-## 5. Configuring Email Verification and Password-Reset Delivery
-
-1. In Supabase Dashboard, go to **Authentication** &rarr; **Email Templates**.
-2. Customize the **Confirm Signup** and **Reset Password** templates.
-3. For production email delivery, connect an external SMTP provider (such as Resend, Amazon SES, or SendGrid) under **Authentication** &rarr; **SMTP Settings**.
 
 ---
 
@@ -109,15 +109,15 @@ Under **Authentication** &rarr; **URL Configuration**:
 
 ## 7. Bootstrapping the First Admin & Assigning First Accountant
 
-By specification, **the first registrant is never granted Admin automatically**. Follow this controlled bootstrap procedure:
+By specification, **the first Google registrant is never granted Admin automatically**. Follow this controlled bootstrap procedure:
 
-1. Register an administrator account through the application's self-registration screen or directly via Supabase Auth.
+1. Sign in with your Google account through the application's "Continue with Google" button.
 2. In the Supabase **SQL Editor**, grant Platform Admin privileges:
 
 ```sql
--- Replace with the registered administrator's email:
+-- Replace with your authenticated Google email:
 INSERT INTO public.platform_admins (user_id, notes)
-SELECT id, 'Initial platform administrator setup'
+SELECT id, 'Initial platform administrator setup via Google'
 FROM auth.users
 WHERE email = 'admin@yourchurch.org';
 ```
@@ -138,7 +138,7 @@ WHERE email = 'accountant@yourchurch.org';
 ```bash
 git init
 git add .
-git commit -m "Initial commit of Church Management System"
+git commit -m "Church Management System with Google-only Auth and Accountant Onboarding"
 git branch -M main
 git remote add origin git@github.com:your-organization/church-management-system.git
 git push -u origin main
@@ -162,36 +162,18 @@ SPA single-page application routing is handled automatically via `"not_found_han
 
 ---
 
-## 10. Separating Development from Production
+## 10. Pre-Launch Security & Business Rules Checklist
 
-- Maintain two distinct Supabase projects: `church-cms-dev` and `church-cms-prod`.
-- Use `supabase/seed.sql` only on the development project.
-- In production, ensure `anon` public key is restricted by RLS, and test that all unauthenticated queries receive 0 rows.
-
----
-
-## 11. Configuring Optional Automatic SMS
-
-1. **Mode A (Send from my phone)** is active by default:
-   - When a donation is saved, staff can tap **Send SMS from my phone**.
-   - Opens the device's native SMS composer (`sms:recipient?body=...`) with recipient and text pre-filled.
-   - Zero carrier gateway setup or extra infrastructure costs.
-2. **Mode B (Automatic SMS Gateway)**:
-   - Deploy the Edge function: `supabase functions deploy notification-worker`.
-   - Set up a cron schedule via pg_cron or Supabase Scheduled Functions.
-   - Failures in SMS dispatch never cancel or revert saved donations.
-
----
-
-## 12. Backups, Restoration Checks & Pre-Launch Security Checklist
-
-- [x] RLS enabled on all 18 database tables.
-- [x] Receipt number registry enforces case-insensitive church-scoped uniqueness (`uq_church_normalized_receipt`).
-- [x] Membership status modification restricted to current church Accountants with mandatory reasons.
-- [x] Platform Admin alone cannot alter Active/Inactive member status.
-- [x] Village Name and Gender excluded from public self-registration.
-- [x] Competition ranking (1, 2, 2, 4) handles equal donation totals with stable secondary ordering.
+- [x] Google-only authentication; email/password, magic link, and phone login removed from UI.
+- [x] Google login email strictly read-only and immutable.
+- [x] Date of birth is a calendar DATE, rejecting future and invalid dates.
+- [x] Village Name updated to canonical label "Village / City Name" across entire app without breaking database columns.
+- [x] Accountant-only side-by-side reconciliation table with choices: Existing, Applicant, or Custom.
+- [x] Version concurrency protection on access approvals (`p_expected_version`).
+- [x] Return for Correction flow with audit reason visible to applicant.
+- [x] Membership status modification strictly restricted to church Accountants with mandatory reasons.
+- [x] Manual receipt number uniqueness enforced across all financial years (`uq_church_normalized_receipt`).
+- [x] Competition ranking (1, 2, 2, 4) includes inactive members' valid donations with stable secondary ordering.
 - [x] Soft deletion preserves audit snapshots; cancellations leave receipt numbers permanently reserved.
 - [x] Excel spreadsheet export sanitizes cells starting with `=`, `+`, `-`, `@` to prevent formula injection.
-- [x] Public shell caching only; confidential APIs, donations, and members are never cached offline.
 - [x] Run automated domain logic unit tests: `npx --yes tsx --test src/lib/domain-logic.test.ts`.

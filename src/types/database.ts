@@ -4,7 +4,7 @@
 
 export type UserRole = 'platform_admin' | 'admin' | 'accountant' | 'collector' | 'member';
 export type MembershipStatus = 'active' | 'inactive';
-export type AccessStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
+export type AccessStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'returned_for_correction' | 'suspended';
 export type Gender = 'male' | 'female' | 'other' | 'prefer_not_to_say';
 export type PaymentMethod = 'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Other';
 export type AccountType = 'cash' | 'bank';
@@ -63,6 +63,7 @@ export interface Member {
   contact_email: string | null;
   village_name: string | null;
   gender: Gender | null;
+  date_of_birth?: string | null;
   joining_date: string;
   membership_status: MembershipStatus;
   created_at: string;
@@ -89,6 +90,12 @@ export interface AccessRequest {
   applicant_name: string;
   applicant_email: string;
   applicant_phone: string | null;
+  date_of_birth?: string | null;
+  gender?: Gender | null;
+  village_name?: string | null;
+  submission_version: number;
+  is_draft: boolean;
+  reviewed_fields_snapshot?: Record<string, unknown> | null;
   status: AccessStatus;
   requested_at: string;
   decided_at: string | null;
