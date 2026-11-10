@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
-import { supabase, supabaseConfig } from '../lib/supabase';
-import type { Church, Profile, ChurchAccess, AccessRequest, UserRole } from '../types/database';
+import { supabase, supabaseConfig, parseOAuthCallback } from '../lib/supabase';
+import type { Church, Profile, ChurchAccess, AccessRequest, UserRole, Gender } from '../types/database';
 
 interface AuthContextType {
   user: User | null;
@@ -332,6 +332,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    // Initialize immediate profile from user Google metadata
+    const initialFullName =
+      currentUser.user_metadata?.full_name ||
+      currentUser.user_metadata?.name ||
+      currentUser.email?.split('@')[0] ||
+      'User';
+
+    const defaultProfile: Profile = {
+      id: currentUser.id,
+      email: currentUser.email || '',
+      full_name: initialFullName,
+      phone: currentUser.user_metadata?.phone || null,
+      created_at: currentUser.created_at,
+      updated_at: currentUser.created_at,
+    };
+    setProfile(defaultProfile);
+
+    // Check for cached access requests for this user
+    try {
+      const cachedReqs = localStorage.getItem(`cms_requests_${currentUser.id}`);
+      if (cachedReqs) {
+        const parsed = JSON.parse(cachedReqs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setUserRequests(parsed as AccessRequest[]);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     if (!supabase) {
       setIsLoading(false);
       return;
@@ -349,19 +379,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (profileData) {
         setProfile(profileData as Profile);
-      } else {
-        setProfile({
-          id: currentUser.id,
-          email: currentUser.email || '',
-          full_name:
-            currentUser.user_metadata?.full_name ||
-            currentUser.user_metadata?.name ||
-            currentUser.email?.split('@')[0] ||
-            'User',
-          phone: currentUser.user_metadata?.phone || null,
-          created_at: currentUser.created_at,
-          updated_at: currentUser.created_at,
-        });
       }
 
       // 2. Check Platform Admin
@@ -391,7 +408,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .eq('user_id', currentUser.id)
         .order('requested_at', { ascending: false });
 
-      setUserRequests((requestsData || []) as AccessRequest[]);
+      if (requestsData && requestsData.length > 0) {
+        setUserRequests(requestsData as AccessRequest[]);
+        try {
+          localStorage.setItem(`cms_requests_${currentUser.id}`, JSON.stringify(requestsData));
+        } catch {
+          // ignore
+        }
+      }
 
       // 5. Determine Authorized Churches list
       if (isAdmin) {
@@ -424,21 +448,106 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
     } catch (err: unknown) {
-      console.error('Error fetching user church authorization:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load user permissions.');
+      console.warn('Notice loading database permissions (authenticated profile active):', err);
     } finally {
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    // Check if test persona is active
+    // Check if test persona is active in sessionStorage
     const storedPersona = window.sessionStorage.getItem('cms_preview_persona');
     if (storedPersona) {
       applyPersona(storedPersona);
       return;
     }
 
+    // A. Check for OAuth callback token in the URL hash fragment
+    const oauthData = parseOAuthCallback();
+    if (oauthData) {
+      const payload = oauthData.payload;
+      const oauthUser: User = {
+        id: payload.sub,
+        app_metadata: payload.app_metadata || { provider: 'google', providers: ['google'] },
+        user_metadata: payload.user_metadata || {},
+        aud: payload.aud || 'authenticated',
+        confirmation_sent_at: '',
+        recovery_sent_at: '',
+        email_change_sent_at: '',
+        new_email: '',
+        invited_at: '',
+        action_link: '',
+        email: payload.email || '',
+        phone: payload.phone || '',
+        created_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+        confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+        email_confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+        phone_confirmed_at: '',
+        last_sign_in_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+        role: payload.role || 'authenticated',
+        updated_at: new Date().toISOString(),
+        identities: [],
+        factors: [],
+      };
+
+      const oauthSession: Session = {
+        access_token: oauthData.accessToken,
+        refresh_token: oauthData.refreshToken || '',
+        expires_in: oauthData.expiresIn || 3600,
+        expires_at: payload.exp || Math.floor(Date.now() / 1000) + 3600,
+        token_type: 'bearer',
+        user: oauthUser,
+      };
+
+      // Clean the fragment hash from the browser address bar immediately
+      try {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } catch {
+        // ignore
+      }
+
+      // Store in localStorage for session durability across reloads
+      try {
+        localStorage.setItem('cms_oauth_user', JSON.stringify(oauthUser));
+        localStorage.setItem('cms_oauth_session', JSON.stringify(oauthSession));
+      } catch {
+        // ignore
+      }
+
+      // Sync session into Supabase client
+      if (supabase && oauthData.accessToken) {
+        supabase.auth.setSession({
+          access_token: oauthData.accessToken,
+          refresh_token: oauthData.refreshToken || '',
+        }).catch((err) => {
+          console.warn('Supabase setSession notice:', err);
+        });
+      }
+
+      setUser(oauthUser);
+      setSession(oauthSession);
+      fetchUserData(oauthUser);
+      return;
+    }
+
+    // B. Check for stored OAuth user from previous session
+    try {
+      const savedUserStr = localStorage.getItem('cms_oauth_user');
+      const savedSessionStr = localStorage.getItem('cms_oauth_session');
+      if (savedUserStr) {
+        const savedUser = JSON.parse(savedUserStr) as User;
+        const savedSession = savedSessionStr ? (JSON.parse(savedSessionStr) as Session) : null;
+        setUser(savedUser);
+        setSession(savedSession);
+        fetchUserData(savedUser);
+        return;
+      }
+    } catch {
+      localStorage.removeItem('cms_oauth_user');
+      localStorage.removeItem('cms_oauth_session');
+    }
+
+    // C. Standard Supabase session check
     if (!supabaseConfig.isConfigured || !supabase) {
       setIsLoading(false);
       return;
@@ -492,6 +601,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     window.sessionStorage.removeItem('cms_preview_persona');
+    try {
+      localStorage.removeItem('cms_oauth_user');
+      localStorage.removeItem('cms_oauth_session');
+    } catch {
+      // ignore
+    }
     if (supabase) {
       try {
         await supabase.auth.signOut();

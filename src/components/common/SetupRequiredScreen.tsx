@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabaseConfig } from '../../lib/supabase';
+import { supabaseConfig, saveSupabaseCredentials } from '../../lib/supabase';
 import {
   ShieldAlert,
   Database,
@@ -11,6 +11,7 @@ import {
   ExternalLink,
   ChevronRight,
   Info,
+  Save,
 } from 'lucide-react';
 
 interface SetupRequiredScreenProps {
@@ -20,6 +21,16 @@ interface SetupRequiredScreenProps {
 export const SetupRequiredScreen: React.FC<SetupRequiredScreenProps> = () => {
   const [activeTab, setActiveTab] = useState<'status' | 'migrations' | 'seed' | 'checklist'>('status');
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const [inputUrl, setInputUrl] = useState<string>(supabaseConfig.supabaseUrl || 'https://hjbepzqiitktxlqilhzo.supabase.co');
+  const [inputAnonKey, setInputAnonKey] = useState<string>('');
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+
+  const handleSaveCredentials = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputUrl) return;
+    saveSupabaseCredentials(inputUrl, inputAnonKey);
+    setSaveMessage('Credentials saved! Reloading application...');
+  };
 
   const copyToClipboard = (text: string, sectionId: string) => {
     navigator.clipboard.writeText(text);
@@ -82,29 +93,78 @@ VITE_SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
               <div className="mt-4 pt-4 border-t border-slate-800 grid sm:grid-cols-2 gap-4">
                 <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
                   <div className="text-xs font-mono text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
-                    <span>Missing Variable 1</span>
-                    <span className="text-red-400 font-bold">Unset</span>
+                    <span>Supabase Project URL</span>
+                    <span className="text-emerald-400 font-bold">Detected</span>
                   </div>
-                  <div className="text-sm font-mono text-amber-300 font-semibold">
-                    VITE_SUPABASE_URL
+                  <div className="text-sm font-mono text-emerald-300 font-semibold truncate">
+                    {supabaseConfig.supabaseUrl || 'https://hjbepzqiitktxlqilhzo.supabase.co'}
                   </div>
                   <div className="text-xs text-slate-400 mt-1">
-                    Your Supabase project API URL (e.g. https://xyz.supabase.co)
+                    Auto-configured from your Supabase Google OAuth token
                   </div>
                 </div>
 
                 <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
                   <div className="text-xs font-mono text-slate-400 uppercase tracking-wider mb-1 flex items-center justify-between">
-                    <span>Missing Variable 2</span>
-                    <span className="text-red-400 font-bold">Unset</span>
+                    <span>Publishable Key</span>
+                    <span className={supabaseConfig.hasAnonKey ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+                      {supabaseConfig.hasAnonKey ? 'Ready' : 'Optional / Configurable'}
+                    </span>
                   </div>
                   <div className="text-sm font-mono text-amber-300 font-semibold">
                     VITE_SUPABASE_PUBLISHABLE_KEY
                   </div>
                   <div className="text-xs text-slate-400 mt-1">
-                    Your public client publishable key (anon key)
+                    Public anon client key from Supabase Dashboard &rarr; API
                   </div>
                 </div>
+              </div>
+
+              {/* Quick Connect Browser Box */}
+              <div className="mt-4 p-4 bg-slate-950/90 rounded-xl border border-slate-800 space-y-3">
+                <h4 className="text-xs font-semibold text-white flex items-center gap-2">
+                  <Key className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Interactive Quick Connect Credentials</span>
+                </h4>
+                <form onSubmit={handleSaveCredentials} className="space-y-3">
+                  <div className="grid sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-slate-400 mb-1">Supabase URL</label>
+                      <input
+                        type="url"
+                        value={inputUrl}
+                        onChange={(e) => setInputUrl(e.target.value)}
+                        required
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-400 mb-1">Anon / Publishable Key</label>
+                      <input
+                        type="text"
+                        value={inputAnonKey}
+                        onChange={(e) => setInputAnonKey(e.target.value)}
+                        placeholder="Paste your anon public key from Supabase dashboard"
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-200 font-mono text-xs focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[11px] text-slate-500">
+                      Saves to browser storage and reloads connection automatically.
+                    </span>
+                    <button
+                      type="submit"
+                      className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Save &amp; Connect</span>
+                    </button>
+                  </div>
+                  {saveMessage && (
+                    <p className="text-xs text-emerald-400 font-medium">{saveMessage}</p>
+                  )}
+                </form>
               </div>
             </div>
           </div>

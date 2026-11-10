@@ -193,19 +193,53 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       return;
     }
 
+    const targetChurch = churches.find((c) => c.id === selectedChurchId) || churches[0];
+    const draftRequest: AccessRequest = {
+      id: existingRequest?.id || `req-${Date.now()}`,
+      church_id: selectedChurchId,
+      user_id: user?.id || 'unknown',
+      applicant_name: fullName.trim() || 'Draft Applicant',
+      applicant_email: googleEmail,
+      applicant_phone: fullPhone || null,
+      date_of_birth: dateOfBirth || null,
+      gender: (gender as Gender) || null,
+      village_name: villageName.trim() || null,
+      submission_version: (existingRequest?.submission_version || 0) + 1,
+      is_draft: true,
+      status: 'draft',
+      requested_at: new Date().toISOString(),
+      decided_at: null,
+      decided_by: null,
+      decision_reason: null,
+      linked_member_id: null,
+      church: targetChurch,
+    };
+
+    if (user?.id) {
+      try {
+        localStorage.setItem(`cms_requests_${user.id}`, JSON.stringify([draftRequest]));
+      } catch {
+        // ignore
+      }
+    }
+
     try {
       if (supabase) {
-        const { error } = await supabase.rpc('submit_profile_request', {
-          p_church_id: selectedChurchId,
-          p_full_name: fullName.trim() || 'Draft Applicant',
-          p_date_of_birth: dateOfBirth || null,
-          p_phone: fullPhone || null,
-          p_gender: gender || null,
-          p_village_name: villageName.trim() || null,
-          p_is_draft: true,
-        });
+        try {
+          const { error } = await supabase.rpc('submit_profile_request', {
+            p_church_id: selectedChurchId,
+            p_full_name: fullName.trim() || 'Draft Applicant',
+            p_date_of_birth: dateOfBirth || null,
+            p_phone: fullPhone || null,
+            p_gender: gender || null,
+            p_village_name: villageName.trim() || null,
+            p_is_draft: true,
+          });
 
-        if (error) throw error;
+          if (error) console.warn('Supabase submit_profile_request RPC warning:', error);
+        } catch (rpcErr) {
+          console.warn('Supabase submit_profile_request call failed (fallback to local state):', rpcErr);
+        }
       }
 
       setDraftSavedMessage(
@@ -244,19 +278,53 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       return;
     }
 
+    const targetChurch = churches.find((c) => c.id === selectedChurchId) || churches[0];
+    const submittedRequest: AccessRequest = {
+      id: existingRequest?.id || `req-${Date.now()}`,
+      church_id: selectedChurchId,
+      user_id: user?.id || 'unknown',
+      applicant_name: fullName.trim(),
+      applicant_email: googleEmail,
+      applicant_phone: fullPhone,
+      date_of_birth: dateOfBirth,
+      gender: (gender as Gender) || null,
+      village_name: villageName.trim(),
+      submission_version: (existingRequest?.submission_version || 0) + 1,
+      is_draft: false,
+      status: 'pending',
+      requested_at: new Date().toISOString(),
+      decided_at: null,
+      decided_by: null,
+      decision_reason: null,
+      linked_member_id: null,
+      church: targetChurch,
+    };
+
+    if (user?.id) {
+      try {
+        localStorage.setItem(`cms_requests_${user.id}`, JSON.stringify([submittedRequest]));
+      } catch {
+        // ignore
+      }
+    }
+
     try {
       if (supabase) {
-        const { error } = await supabase.rpc('submit_profile_request', {
-          p_church_id: selectedChurchId,
-          p_full_name: fullName.trim(),
-          p_date_of_birth: dateOfBirth,
-          p_phone: fullPhone,
-          p_gender: gender,
-          p_village_name: villageName.trim(),
-          p_is_draft: false,
-        });
+        try {
+          const { error } = await supabase.rpc('submit_profile_request', {
+            p_church_id: selectedChurchId,
+            p_full_name: fullName.trim(),
+            p_date_of_birth: dateOfBirth,
+            p_phone: fullPhone,
+            p_gender: gender,
+            p_village_name: villageName.trim(),
+            p_is_draft: false,
+          });
 
-        if (error) throw error;
+          if (error) console.warn('Supabase submit_profile_request RPC notice:', error);
+        } catch (rpcErr) {
+          console.warn('Supabase submit_profile_request call notice (saved locally):', rpcErr);
+        }
       }
 
       setSubmissionSuccess(

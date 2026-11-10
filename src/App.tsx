@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabaseConfig } from './lib/supabase';
+import { supabaseConfig, hasOAuthCallback } from './lib/supabase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SetupRequiredScreen } from './components/common/SetupRequiredScreen';
 import { Navbar } from './components/common/Navbar';
@@ -171,8 +171,15 @@ const MainAppContent: React.FC<{
 export default function App() {
   const [isPreviewActive, setIsPreviewActive] = useState(false);
 
+  // If the user arrived with an OAuth callback fragment (#access_token=) or has an active OAuth user,
+  // do NOT show SetupRequiredScreen: allow AuthProvider to mount and proceed to CompleteProfileScreen!
+  const hasOAuthActivity =
+    hasOAuthCallback() ||
+    (typeof window !== 'undefined' &&
+      Boolean(localStorage.getItem('cms_oauth_user') || sessionStorage.getItem('cms_preview_persona')));
+
   // If Supabase credentials are not set, show the SetupRequiredScreen by default
-  if (!supabaseConfig.isConfigured && !isPreviewActive) {
+  if (!supabaseConfig.isConfigured && !isPreviewActive && !hasOAuthActivity) {
     return (
       <div className="relative">
         <SetupRequiredScreen />
