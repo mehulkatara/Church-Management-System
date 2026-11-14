@@ -266,7 +266,6 @@ export const ReportsScreen: React.FC = () => {
             'Full Name': sanitizeExcelCell(m.full_name),
             'Village Name': sanitizeExcelCell(m.village_name || ''),
             'Contact Phone': sanitizeExcelCell(m.contact_phone || ''),
-            'Contact Email': sanitizeExcelCell(m.contact_email || ''),
             'Membership Status': sanitizeExcelCell(m.membership_status.toUpperCase()),
             'Joining Date': sanitizeExcelCell(m.joining_date),
           }));

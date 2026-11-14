@@ -50,7 +50,6 @@ export const AccessApprovalsScreen: React.FC = () => {
     fullName: 'applicant',
     dateOfBirth: 'applicant',
     phone: 'applicant',
-    contactEmail: 'existing',
     villageName: 'applicant',
     gender: 'applicant',
   });
@@ -60,7 +59,6 @@ export const AccessApprovalsScreen: React.FC = () => {
     fullName: '',
     dateOfBirth: '',
     phone: '',
-    contactEmail: '',
     villageName: '',
     gender: '',
   });
@@ -127,8 +125,7 @@ export const AccessApprovalsScreen: React.FC = () => {
           church_id: activeChurch?.id || 'c1',
           member_number: 'M-0001',
           full_name: 'Daniel Thomas (Senior)',
-          contact_phone: '+919840198400',
-          contact_email: 'd.thomas.family@gmail.com',
+          contact_phone: '9840198400',
           village_name: 'Tambaram',
           gender: 'male',
           date_of_birth: '1962-04-10',
@@ -144,8 +141,7 @@ export const AccessApprovalsScreen: React.FC = () => {
           church_id: activeChurch?.id || 'c1',
           member_number: 'M-0002',
           full_name: 'Rebecca Samuel',
-          contact_phone: '+919884000000',
-          contact_email: 'rebecca@samuel.com',
+          contact_phone: '9884000000',
           village_name: 'Kallakurichi Old Town',
           gender: 'female',
           date_of_birth: null,
@@ -232,8 +228,7 @@ export const AccessApprovalsScreen: React.FC = () => {
             church_id: activeChurch.id,
             member_number: 'M-0001',
             full_name: 'Daniel Thomas (Senior)',
-            contact_phone: '+919840198400',
-            contact_email: 'd.thomas.family@gmail.com',
+            contact_phone: '9840198400',
             village_name: 'Tambaram',
             gender: 'male',
             date_of_birth: '1962-04-10',
@@ -249,8 +244,7 @@ export const AccessApprovalsScreen: React.FC = () => {
             church_id: activeChurch.id,
             member_number: 'M-0002',
             full_name: 'Rebecca Samuel',
-            contact_phone: '+919884000000',
-            contact_email: 'rebecca@samuel.com',
+            contact_phone: '9884000000',
             village_name: 'Kallakurichi Old Town',
             gender: 'female',
             date_of_birth: null,
@@ -290,7 +284,6 @@ export const AccessApprovalsScreen: React.FC = () => {
       fullName: 'applicant',
       dateOfBirth: 'applicant',
       phone: 'applicant',
-      contactEmail: 'existing',
       villageName: 'applicant',
       gender: 'applicant',
     });
@@ -299,7 +292,6 @@ export const AccessApprovalsScreen: React.FC = () => {
       fullName: req.applicant_name,
       dateOfBirth: req.date_of_birth || '',
       phone: req.applicant_phone || '',
-      contactEmail: '',
       villageName: req.village_name || '',
       gender: req.gender || '',
     });
@@ -328,13 +320,6 @@ export const AccessApprovalsScreen: React.FC = () => {
     selectedRequest?.applicant_phone,
     approvalMode === 'create_new' ? 'applicant' : choices.phone,
     customValues.phone
-  );
-
-  const finalContactEmail = resolveReviewedField(
-    selectedExistingMember?.contact_email,
-    null, // Applicant's Google auth email is not automatically contact email
-    approvalMode === 'create_new' ? 'custom' : choices.contactEmail,
-    customValues.contactEmail
   );
 
   const finalVillageName = resolveReviewedField(
@@ -381,7 +366,7 @@ export const AccessApprovalsScreen: React.FC = () => {
           p_final_full_name: finalFullName,
           p_final_date_of_birth: finalDateOfBirth,
           p_final_phone: finalPhone,
-          p_final_contact_email: finalContactEmail,
+          p_final_contact_email: null,
           p_final_village_name: finalVillageName,
           p_final_gender: finalGender,
         });
@@ -871,35 +856,6 @@ export const AccessApprovalsScreen: React.FC = () => {
                         )}
                       </td>
                       <td className="py-2.5 px-3 font-mono text-emerald-300">{finalPhone || '—'}</td>
-                    </tr>
-
-                    {/* Member Contact Email */}
-                    <tr>
-                      <td className="py-2.5 px-3 font-medium text-white">Contact Email</td>
-                      <td className="py-2.5 px-3 text-slate-400 font-mono">{selectedExistingMember?.contact_email || '—'}</td>
-                      <td className="py-2.5 px-3 text-slate-500 font-mono text-[10px]">
-                        Google Auth ({selectedRequest.applicant_email})
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <select
-                          value={choices.contactEmail}
-                          onChange={(e) => setChoices({ ...choices, contactEmail: e.target.value as MergeChoice })}
-                          className="bg-slate-900 border border-slate-700 text-xs rounded-lg px-2 py-1 text-white"
-                        >
-                          <option value="existing">Keep Existing</option>
-                          <option value="custom">Custom Email</option>
-                        </select>
-                        {choices.contactEmail === 'custom' && (
-                          <input
-                            type="email"
-                            placeholder="member.contact@example.com"
-                            value={customValues.contactEmail}
-                            onChange={(e) => setCustomValues({ ...customValues, contactEmail: e.target.value })}
-                            className="mt-1 w-full bg-slate-900 border border-slate-700 text-xs rounded px-2 py-0.5 text-white"
-                          />
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-emerald-300">{finalContactEmail || '—'}</td>
                     </tr>
 
                     {/* Village / City Name */}

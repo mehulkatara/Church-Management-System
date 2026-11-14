@@ -20,7 +20,6 @@ import {
   CheckCircle2,
   XCircle,
   Phone,
-  Mail,
   MapPin,
   Calendar,
   Lock,
@@ -51,7 +50,6 @@ export const MembersScreen: React.FC = () => {
   // Form Fields
   const [fullName, setFullName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
   const [villageName, setVillageName] = useState('');
   const [gender, setGender] = useState<Gender | ''>('');
   const [dateOfBirth, setDateOfBirth] = useState('');
@@ -151,7 +149,6 @@ export const MembersScreen: React.FC = () => {
       villageName,
       gender,
       contactPhone,
-      contactEmail,
       dateOfBirth,
     });
 
@@ -171,7 +168,6 @@ export const MembersScreen: React.FC = () => {
         member_number: memberNumber,
         full_name: validation.normalized.fullName,
         contact_phone: validation.normalized.contactPhone,
-        contact_email: validation.normalized.contactEmail,
         village_name: validation.normalized.villageName,
         gender: validation.normalized.gender,
         date_of_birth: validation.normalized.dateOfBirth,
@@ -220,11 +216,6 @@ export const MembersScreen: React.FC = () => {
       }
     }
 
-    const trimmedEmail = contactEmail.trim();
-    if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      nextFieldErrors.contactEmail = 'Please enter a valid contact email address.';
-    }
-
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors);
       setFormError(Object.values(nextFieldErrors)[0]);
@@ -237,7 +228,6 @@ export const MembersScreen: React.FC = () => {
       const updatePayload: Partial<Member> = {
         full_name: trimmedName,
         contact_phone: normalizedPhone,
-        contact_email: trimmedEmail || null,
         date_of_birth: dateOfBirth || null,
       };
 
@@ -274,7 +264,6 @@ export const MembersScreen: React.FC = () => {
     setSelectedMember(member);
     setFullName(member.full_name);
     setContactPhone(formatIndianMobileInput(member.contact_phone));
-    setContactEmail(member.contact_email || '');
     setVillageName(member.village_name || '');
     setGender(member.gender || '');
     setDateOfBirth(member.date_of_birth || '');
@@ -287,7 +276,6 @@ export const MembersScreen: React.FC = () => {
   const resetForm = () => {
     setFullName('');
     setContactPhone('');
-    setContactEmail('');
     setVillageName('');
     setGender('');
     setDateOfBirth('');
@@ -486,12 +474,6 @@ export const MembersScreen: React.FC = () => {
                         ) : (
                           <span className="text-slate-600">No phone</span>
                         )}
-                        {m.contact_email && (
-                          <div className="flex items-center gap-1 text-[11px] text-slate-400">
-                            <Mail className="w-3 h-3 text-slate-500" />
-                            <span>{m.contact_email}</span>
-                          </div>
-                        )}
                       </td>
                       <td className="py-3 px-4 text-slate-300">
                         {m.village_name ? (
@@ -586,46 +568,25 @@ export const MembersScreen: React.FC = () => {
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Mobile Number</label>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={contactPhone}
-                  onChange={(e) => {
-                    setContactPhone(formatIndianMobileInput(e.target.value));
-                    if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
-                  }}
-                  placeholder="9840012345"
-                  className={`w-full bg-slate-950 border ${
-                    fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
-                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
-                />
-                {fieldErrors.contactPhone && (
-                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactPhone}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Contact Email</label>
-                <input
-                  type="email"
-                  value={contactEmail}
-                  onChange={(e) => {
-                    setContactEmail(e.target.value);
-                    if (fieldErrors.contactEmail) setFieldErrors((prev) => ({ ...prev, contactEmail: '' }));
-                  }}
-                  placeholder="contact@example.com"
-                  className={`w-full bg-slate-950 border ${
-                    fieldErrors.contactEmail ? 'border-red-500' : 'border-slate-700'
-                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
-                />
-                {fieldErrors.contactEmail && (
-                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactEmail}</p>
-                )}
-              </div>
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">Mobile Number</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                value={contactPhone}
+                onChange={(e) => {
+                  setContactPhone(formatIndianMobileInput(e.target.value));
+                  if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
+                }}
+                placeholder="10-digit mobile number (e.g. 9840012345)"
+                className={`w-full bg-slate-950 border ${
+                  fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
+              />
+              {fieldErrors.contactPhone && (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactPhone}</p>
+              )}
             </div>
 
             {/* Village / City Name (Mandatory) */}
@@ -776,45 +737,25 @@ export const MembersScreen: React.FC = () => {
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Mobile Number</label>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  value={contactPhone}
-                  onChange={(e) => {
-                    setContactPhone(formatIndianMobileInput(e.target.value));
-                    if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
-                  }}
-                  placeholder="9840012345"
-                  className={`w-full bg-slate-950 border ${
-                    fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
-                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
-                />
-                {fieldErrors.contactPhone && (
-                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactPhone}</p>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Contact Email</label>
-                <input
-                  type="email"
-                  value={contactEmail}
-                  onChange={(e) => {
-                    setContactEmail(e.target.value);
-                    if (fieldErrors.contactEmail) setFieldErrors((prev) => ({ ...prev, contactEmail: '' }));
-                  }}
-                  className={`w-full bg-slate-950 border ${
-                    fieldErrors.contactEmail ? 'border-red-500' : 'border-slate-700'
-                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
-                />
-                {fieldErrors.contactEmail && (
-                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactEmail}</p>
-                )}
-              </div>
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">Mobile Number</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                value={contactPhone}
+                onChange={(e) => {
+                  setContactPhone(formatIndianMobileInput(e.target.value));
+                  if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
+                }}
+                placeholder="10-digit mobile number (e.g. 9840012345)"
+                className={`w-full bg-slate-950 border ${
+                  fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
+              />
+              {fieldErrors.contactPhone && (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactPhone}</p>
+              )}
             </div>
 
             {/* Village / City Name: Admin and Accountant only; Collectors disabled */}

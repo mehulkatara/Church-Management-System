@@ -386,7 +386,6 @@ test('Add new church member requires full name, village/city name, and gender', 
   assert.equal(validMinimal.normalized.villageName, 'Tambaram');
   assert.equal(validMinimal.normalized.gender, 'female');
   assert.equal(validMinimal.normalized.contactPhone, null);
-  assert.equal(validMinimal.normalized.contactEmail, null);
   assert.equal(validMinimal.normalized.dateOfBirth, null);
 });
 

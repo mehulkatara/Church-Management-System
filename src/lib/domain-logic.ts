@@ -642,7 +642,6 @@ export interface NewChurchMemberInput {
   villageName: string;
   gender: Gender | '' | null | undefined;
   contactPhone?: string | null;
-  contactEmail?: string | null;
   dateOfBirth?: string | null;
 }
 
@@ -661,7 +660,6 @@ export function validateNewChurchMember(input: NewChurchMemberInput): {
     villageName: string;
     gender: Gender | null;
     contactPhone: string | null;
-    contactEmail: string | null;
     dateOfBirth: string | null;
   };
 } {
@@ -693,11 +691,6 @@ export function validateNewChurchMember(input: NewChurchMemberInput): {
     }
   }
 
-  const trimmedEmail = (input.contactEmail || '').trim();
-  if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-    errors.contactEmail = 'Please enter a valid contact email address.';
-  }
-
   const trimmedDob = (input.dateOfBirth || '').trim();
   if (trimmedDob.length > 0) {
     const dobRes = validateDateOfBirth(trimmedDob);
@@ -714,7 +707,6 @@ export function validateNewChurchMember(input: NewChurchMemberInput): {
       villageName: trimmedVillage,
       gender: validatedGender,
       contactPhone: normalizedPhone,
-      contactEmail: trimmedEmail.length > 0 ? trimmedEmail : null,
       dateOfBirth: trimmedDob.length > 0 ? trimmedDob : null,
     },
   };

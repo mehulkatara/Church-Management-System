@@ -60,7 +60,6 @@ export interface Member {
   member_number: string;
   full_name: string;
   contact_phone: string | null;
-  contact_email: string | null;
   village_name: string | null;
   gender: Gender | null;
   date_of_birth?: string | null;

@@ -49,7 +49,6 @@ export const MyProfileScreen: React.FC = () => {
         member_number: 'M-0042',
         full_name: savedPreview?.full_name || profile?.full_name || user?.user_metadata?.full_name || 'Member',
         contact_phone: savedPreview?.contact_phone ?? profile?.phone ?? '',
-        contact_email: savedPreview?.contact_email ?? profile?.email ?? user?.email ?? '',
         village_name: 'Tambaram',
         gender: (savedPreview?.gender as Gender | null | undefined) ?? null,
         date_of_birth: '1993-05-14',
@@ -241,16 +240,6 @@ export const MyProfileScreen: React.FC = () => {
           </div>
 
           <div>
-            <span className="text-slate-500 flex items-center gap-1">
-              <Lock className="w-3 h-3 text-amber-400" />
-              Contact Email (Read-Only)
-            </span>
-            <span className="text-slate-300 font-mono">
-              {member?.contact_email || user?.email || 'Not provided'}
-            </span>
-          </div>
-
-          <div>
             <span className="text-slate-500 block">Church Member #</span>
             <span className="text-sky-400 font-mono font-semibold">
               {member?.member_number || 'Pending Assignment'}
@@ -299,8 +288,8 @@ export const MyProfileScreen: React.FC = () => {
           <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
           <span>
             <strong>Security Boundary:</strong> Full Name, 10-digit Indian Mobile Number (without +91),
-            and Gender are mandatory when updating your profile. Email addresses are read-only and
-            cannot be changed by members.
+            and Gender are mandatory when updating your profile. Your Login / Authentication Email
+            is managed via your Google account and cannot be changed.
           </span>
         </div>
 
