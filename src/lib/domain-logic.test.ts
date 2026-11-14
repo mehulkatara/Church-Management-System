@@ -196,17 +196,25 @@ test('Date of birth validation rejects missing, invalid format, future, or impos
   assert.equal(valid.valid, true);
 });
 
-test('Phone number normalization handles Indian and international numbers', () => {
+test('Indian mobile number validation rejects invalid numbers and strips +91/0 prefix', () => {
   assert.equal(normalizePhoneNumber('').valid, false);
   assert.equal(normalizePhoneNumber('123').valid, false); // too short
+  assert.equal(normalizePhoneNumber('5876543210').valid, false); // must start with 6-9
+  assert.equal(normalizePhoneNumber('9999999999').valid, false); // repeating digits rejected
+  assert.equal(normalizePhoneNumber('+1 555 123 4567').valid, false); // non-Indian rejected
+  assert.equal(normalizePhoneNumber('98765abc10').valid, false); // non-numeric rejected
 
   const res1 = normalizePhoneNumber('+91 98765 43210');
   assert.equal(res1.valid, true);
-  assert.equal(res1.normalized, '+919876543210');
+  assert.equal(res1.normalized, '9876543210');
 
   const res2 = normalizePhoneNumber('09876543210');
   assert.equal(res2.valid, true);
-  assert.equal(res2.normalized, '09876543210');
+  assert.equal(res2.normalized, '9876543210');
+
+  const res3 = normalizePhoneNumber('98401 23456');
+  assert.equal(res3.valid, true);
+  assert.equal(res3.normalized, '9840123456');
 });
 
 test('Onboarding profile validation allows draft with only church, but requires all fields for submit', () => {
@@ -286,13 +294,12 @@ test('Accountant side-by-side field resolution logic respects choices', () => {
   );
 });
 
-test('Member profile self-update requires full name, phone number, and gender', () => {
+test('Member profile self-update requires full name, 10-digit Indian mobile, and gender (no email change)', () => {
   // Missing all mandatory fields
   const emptyRes = validateMemberSelfProfileUpdate({
     fullName: '   ',
     contactPhone: '',
     gender: '',
-    contactEmail: '',
   });
   assert.equal(emptyRes.valid, false);
   assert.ok(emptyRes.errors.fullName);
@@ -302,44 +309,49 @@ test('Member profile self-update requires full name, phone number, and gender', 
   // Missing gender only (must reject null/empty)
   const missingGender = validateMemberSelfProfileUpdate({
     fullName: 'David Paul',
-    contactPhone: '+91 98401 23456',
+    contactPhone: '9840123456',
     gender: '',
   });
   assert.equal(missingGender.valid, false);
   assert.ok(missingGender.errors.gender);
 
-  // Invalid phone number rejected
-  const badPhone = validateMemberSelfProfileUpdate({
-    fullName: 'David Paul',
-    contactPhone: '123',
-    gender: 'male',
-  });
-  assert.equal(badPhone.valid, false);
-  assert.ok(badPhone.errors.contactPhone);
+  // Invalid Indian phone numbers rejected (too short, wrong starting digit, repeating)
+  assert.equal(
+    validateMemberSelfProfileUpdate({
+      fullName: 'David Paul',
+      contactPhone: '123',
+      gender: 'male',
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateMemberSelfProfileUpdate({
+      fullName: 'David Paul',
+      contactPhone: '5123456789',
+      gender: 'male',
+    }).valid,
+    false
+  );
+  assert.equal(
+    validateMemberSelfProfileUpdate({
+      fullName: 'David Paul',
+      contactPhone: '8888888888',
+      gender: 'male',
+    }).valid,
+    false
+  );
 
-  // Invalid optional contact email rejected
-  const badEmail = validateMemberSelfProfileUpdate({
-    fullName: 'David Paul',
-    contactPhone: '+91 98401 23456',
-    gender: 'male',
-    contactEmail: 'not-an-email',
-  });
-  assert.equal(badEmail.valid, false);
-  assert.ok(badEmail.errors.contactEmail);
-
-  // Valid update with prefer_not_to_say and normalized phone
+  // Valid update strips +91 and stores 10-digit Indian mobile number
   const validRes = validateMemberSelfProfileUpdate({
     fullName: '  David Paul  ',
     contactPhone: '+91 98401 23456',
     gender: 'prefer_not_to_say',
-    contactEmail: '',
   });
   assert.equal(validRes.valid, true);
   assert.equal(Object.keys(validRes.errors).length, 0);
   assert.equal(validRes.normalized.fullName, 'David Paul');
-  assert.equal(validRes.normalized.contactPhone, '+919840123456');
+  assert.equal(validRes.normalized.contactPhone, '9840123456');
   assert.equal(validRes.normalized.gender, 'prefer_not_to_say');
-  assert.equal(validRes.normalized.contactEmail, null);
 });
 
 test('Add new church member requires full name, village/city name, and gender', () => {

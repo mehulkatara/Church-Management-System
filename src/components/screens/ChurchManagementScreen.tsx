@@ -199,7 +199,7 @@ export const ChurchManagementScreen: React.FC = () => {
                   type="tel"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+91 98400 00000"
+                  placeholder="9840012345"
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-sky-500"
                 />
               </div>

@@ -5,11 +5,11 @@ import type { Member, Gender } from '../../types/database';
 import {
   GENDER_LABELS,
   validateMemberSelfProfileUpdate,
+  formatIndianMobileInput,
 } from '../../lib/domain-logic';
 import {
   User,
   Phone,
-  Mail,
   CheckCircle,
   AlertCircle,
   Info,
@@ -22,7 +22,6 @@ export const MyProfileScreen: React.FC = () => {
   const [member, setMember] = useState<Member | null>(null);
   const [fullName, setFullName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
   const [gender, setGender] = useState<Gender | ''>('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -63,8 +62,7 @@ export const MyProfileScreen: React.FC = () => {
       };
       setMember(previewMember);
       setFullName(previewMember.full_name);
-      setContactPhone(previewMember.contact_phone || '');
-      setContactEmail(previewMember.contact_email || '');
+      setContactPhone(formatIndianMobileInput(previewMember.contact_phone));
       setGender(previewMember.gender || '');
       setIsLoading(false);
       return;
@@ -73,8 +71,7 @@ export const MyProfileScreen: React.FC = () => {
     if (!supabase || !activeChurch || !user) {
       if (profile) {
         setFullName(profile.full_name);
-        setContactPhone(profile.phone || '');
-        setContactEmail(profile.email);
+        setContactPhone(formatIndianMobileInput(profile.phone));
       }
       setIsLoading(false);
       return;
@@ -94,13 +91,11 @@ export const MyProfileScreen: React.FC = () => {
           const m = link.member as Member;
           setMember(m);
           setFullName(m.full_name);
-          setContactPhone(m.contact_phone || '');
-          setContactEmail(m.contact_email || '');
+          setContactPhone(formatIndianMobileInput(m.contact_phone));
           setGender(m.gender || '');
         } else if (profile) {
           setFullName(profile.full_name);
-          setContactPhone(profile.phone || '');
-          setContactEmail(profile.email);
+          setContactPhone(formatIndianMobileInput(profile.phone));
         }
       } catch (err) {
         console.error('Error fetching member profile:', err);
@@ -121,7 +116,6 @@ export const MyProfileScreen: React.FC = () => {
       fullName,
       contactPhone,
       gender,
-      contactEmail,
     });
 
     if (!validation.valid) {
@@ -143,7 +137,6 @@ export const MyProfileScreen: React.FC = () => {
               ...member,
               full_name: validation.normalized.fullName,
               contact_phone: validation.normalized.contactPhone,
-              contact_email: validation.normalized.contactEmail,
               gender: validation.normalized.gender,
               updated_at: new Date().toISOString(),
             }
@@ -158,7 +151,6 @@ export const MyProfileScreen: React.FC = () => {
         }
         setFullName(validation.normalized.fullName);
         setContactPhone(validation.normalized.contactPhone);
-        setContactEmail(validation.normalized.contactEmail || '');
         if (validation.normalized.gender) {
           setGender(validation.normalized.gender);
         }
@@ -175,7 +167,6 @@ export const MyProfileScreen: React.FC = () => {
         p_full_name: validation.normalized.fullName,
         p_contact_phone: validation.normalized.contactPhone,
         p_gender: validation.normalized.gender,
-        p_contact_email: validation.normalized.contactEmail,
       });
 
       if (error) throw error;
@@ -184,8 +175,7 @@ export const MyProfileScreen: React.FC = () => {
       if (result?.member) {
         setMember(result.member);
         setFullName(result.member.full_name);
-        setContactPhone(result.member.contact_phone || '');
-        setContactEmail(result.member.contact_email || '');
+        setContactPhone(formatIndianMobileInput(result.member.contact_phone));
         setGender(result.member.gender || '');
       }
 
@@ -216,7 +206,7 @@ export const MyProfileScreen: React.FC = () => {
           <span>My Member Profile</span>
         </h1>
         <p className="text-xs text-slate-400">
-          Update your required personal details (full name, phone number, and gender) for church notices and receipts
+          Update your required personal details (full name, 10-digit Indian mobile number, and gender) for church notices and receipts
         </p>
       </div>
 
@@ -243,8 +233,21 @@ export const MyProfileScreen: React.FC = () => {
         {/* Read-Only Identity Card */}
         <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
           <div>
-            <span className="text-slate-500 block">Login / Authentication Email</span>
-            <span className="text-white font-mono">{user?.email}</span>
+            <span className="text-slate-500 flex items-center gap-1">
+              <Lock className="w-3 h-3 text-amber-400" />
+              Login / Authentication Email
+            </span>
+            <span className="text-white font-mono">{user?.email || 'Not provided'}</span>
+          </div>
+
+          <div>
+            <span className="text-slate-500 flex items-center gap-1">
+              <Lock className="w-3 h-3 text-amber-400" />
+              Contact Email (Read-Only)
+            </span>
+            <span className="text-slate-300 font-mono">
+              {member?.contact_email || user?.email || 'Not provided'}
+            </span>
           </div>
 
           <div>
@@ -291,13 +294,13 @@ export const MyProfileScreen: React.FC = () => {
           </div>
         </div>
 
-        {/* Notice on Contact Email vs Authentication Email */}
+        {/* Notice on Read-Only Email & Indian Mobile Format */}
         <div className="bg-sky-950/30 border border-sky-500/20 rounded-xl p-3 text-[11px] text-slate-400 flex items-start gap-2">
           <Info className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
           <span>
-            <strong>Security Boundary:</strong> Full Name, Phone Number, and Gender are mandatory
-            when updating your profile. Editing your Contact Email updates where notifications
-            and receipts are addressed, without altering your Google login email.
+            <strong>Security Boundary:</strong> Full Name, 10-digit Indian Mobile Number (without +91),
+            and Gender are mandatory when updating your profile. Email addresses are read-only and
+            cannot be changed by members.
           </span>
         </div>
 
@@ -333,23 +336,25 @@ export const MyProfileScreen: React.FC = () => {
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">
-            {/* Mandatory Phone Number */}
+            {/* Mandatory Indian Mobile Number */}
             <div>
               <label htmlFor="profile-phone" className="block text-slate-300 font-medium mb-1">
-                Phone Number <span className="text-red-400">*</span>
+                Mobile Number <span className="text-red-400">*</span>
               </label>
               <div className="relative">
                 <Phone className="w-4 h-4 text-slate-500 absolute left-3.5 top-2.5" />
                 <input
                   id="profile-phone"
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={contactPhone}
                   onChange={(e) => {
-                    setContactPhone(e.target.value);
+                    setContactPhone(formatIndianMobileInput(e.target.value));
                     if (errors.contactPhone) setErrors((prev) => ({ ...prev, contactPhone: '' }));
                   }}
                   required
-                  placeholder="+91 98400 00000"
+                  placeholder="10-digit mobile number (e.g. 9840123456)"
                   className={`w-full bg-slate-950 border rounded-xl pl-10 pr-3.5 py-2 text-white font-mono focus:outline-none ${
                     errors.contactPhone
                       ? 'border-red-500/60 focus:border-red-400'
@@ -357,68 +362,44 @@ export const MyProfileScreen: React.FC = () => {
                   }`}
                 />
               </div>
-              {errors.contactPhone && (
+              {errors.contactPhone ? (
                 <p className="text-[11px] text-red-400 mt-1">{errors.contactPhone}</p>
+              ) : (
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Enter 10 digits without +91 (starts with 6, 7, 8, or 9).
+                </p>
               )}
             </div>
 
-            {/* Optional Contact Email */}
+            {/* Mandatory Gender */}
             <div>
-              <label htmlFor="profile-contact-email" className="block text-slate-300 font-medium mb-1">
-                Contact Email <span className="text-slate-500 font-normal">(Optional)</span>
+              <label htmlFor="profile-gender" className="block text-slate-300 font-medium mb-1">
+                Gender <span className="text-red-400">*</span>
               </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-500 absolute left-3.5 top-2.5" />
-                <input
-                  id="profile-contact-email"
-                  type="email"
-                  value={contactEmail}
-                  onChange={(e) => {
-                    setContactEmail(e.target.value);
-                    if (errors.contactEmail) setErrors((prev) => ({ ...prev, contactEmail: '' }));
-                  }}
-                  placeholder="contact@example.com"
-                  className={`w-full bg-slate-950 border rounded-xl pl-10 pr-3.5 py-2 text-white focus:outline-none ${
-                    errors.contactEmail
-                      ? 'border-red-500/60 focus:border-red-400'
-                      : 'border-slate-700 focus:border-sky-500'
-                  }`}
-                />
-              </div>
-              {errors.contactEmail && (
-                <p className="text-[11px] text-red-400 mt-1">{errors.contactEmail}</p>
+              <select
+                id="profile-gender"
+                value={gender}
+                onChange={(e) => {
+                  setGender(e.target.value as Gender | '');
+                  if (errors.gender) setErrors((prev) => ({ ...prev, gender: '' }));
+                }}
+                required
+                className={`w-full bg-slate-950 border rounded-xl px-3.5 py-2 text-white focus:outline-none ${
+                  errors.gender
+                    ? 'border-red-500/60 focus:border-red-400'
+                    : 'border-slate-700 focus:border-sky-500'
+                }`}
+              >
+                <option value="">-- Select Gender --</option>
+                <option value="male">{GENDER_LABELS.male}</option>
+                <option value="female">{GENDER_LABELS.female}</option>
+                <option value="other">{GENDER_LABELS.other}</option>
+                <option value="prefer_not_to_say">{GENDER_LABELS.prefer_not_to_say}</option>
+              </select>
+              {errors.gender && (
+                <p className="text-[11px] text-red-400 mt-1">{errors.gender}</p>
               )}
             </div>
-          </div>
-
-          {/* Mandatory Gender */}
-          <div>
-            <label htmlFor="profile-gender" className="block text-slate-300 font-medium mb-1">
-              Gender <span className="text-red-400">*</span>
-            </label>
-            <select
-              id="profile-gender"
-              value={gender}
-              onChange={(e) => {
-                setGender(e.target.value as Gender | '');
-                if (errors.gender) setErrors((prev) => ({ ...prev, gender: '' }));
-              }}
-              required
-              className={`w-full bg-slate-950 border rounded-xl px-3.5 py-2 text-white focus:outline-none ${
-                errors.gender
-                  ? 'border-red-500/60 focus:border-red-400'
-                  : 'border-slate-700 focus:border-sky-500'
-              }`}
-            >
-              <option value="">-- Select Gender --</option>
-              <option value="male">{GENDER_LABELS.male}</option>
-              <option value="female">{GENDER_LABELS.female}</option>
-              <option value="other">{GENDER_LABELS.other}</option>
-              <option value="prefer_not_to_say">{GENDER_LABELS.prefer_not_to_say}</option>
-            </select>
-            {errors.gender && (
-              <p className="text-[11px] text-red-400 mt-1">{errors.gender}</p>
-            )}
           </div>
         </div>
 

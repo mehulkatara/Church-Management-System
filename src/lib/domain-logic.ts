@@ -433,7 +433,26 @@ export function validateDateOfBirth(dob: string | null | undefined): {
 }
 
 /**
- * Normalizes phone numbers (e.g. +91 98765 43210 -> +919876543210).
+ * Strips non-digit characters and removes an optional leading +91 / 91 / 0 prefix
+ * so Indian mobile inputs store only the 10-digit mobile number.
+ */
+export function formatIndianMobileInput(raw: string | null | undefined): string {
+  if (!raw || typeof raw !== 'string') return '';
+  let digits = raw.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  } else if (digits.length > 10 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  }
+  return digits.slice(0, 10);
+}
+
+/**
+ * Validates and normalizes Indian 10-digit mobile numbers without +91 prefix.
+ * Accepts 10 digits starting with 6, 7, 8, or 9 (auto-stripping pasted +91 / 0 prefixes),
+ * and rejects invalid lengths, non-Indian prefixes, or all-identical repeating digits.
  */
 export function normalizePhoneNumber(phone: string | null | undefined): {
   normalized: string;
@@ -441,18 +460,43 @@ export function normalizePhoneNumber(phone: string | null | undefined): {
   error?: string;
 } {
   if (!phone || typeof phone !== 'string' || !phone.trim()) {
-    return { normalized: '', valid: false, error: 'Phone number is required.' };
+    return { normalized: '', valid: false, error: 'Mobile number is required.' };
   }
   const trimmed = phone.trim();
-  // Strip spaces, dashes, parentheses
-  const cleaned = trimmed.replace(/[\s\-()]/g, '');
-  if (!/^\+?[0-9]{6,15}$/.test(cleaned)) {
+  // Allow digits, spaces, hyphens, parentheses, and an optional leading +
+  if (!/^[+\d\s\-()]+$/.test(trimmed)) {
     return {
       normalized: trimmed,
       valid: false,
-      error: 'Please enter a valid phone number (at least 6 digits).',
+      error: 'Mobile number can only contain digits.',
     };
   }
+
+  let cleaned = trimmed.replace(/[\s\-()]/g, '');
+  if (cleaned.startsWith('+91') && cleaned.length === 13) {
+    cleaned = cleaned.slice(3);
+  } else if (cleaned.startsWith('91') && cleaned.length === 12) {
+    cleaned = cleaned.slice(2);
+  } else if (cleaned.startsWith('0') && cleaned.length === 11) {
+    cleaned = cleaned.slice(1);
+  }
+
+  if (!/^[6-9][0-9]{9}$/.test(cleaned)) {
+    return {
+      normalized: trimmed,
+      valid: false,
+      error: 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).',
+    };
+  }
+
+  if (/^(\d)\1{9}$/.test(cleaned)) {
+    return {
+      normalized: trimmed,
+      valid: false,
+      error: 'Please enter a valid Indian mobile number (repeating digits are not allowed).',
+    };
+  }
+
   return { normalized: cleaned, valid: true };
 }
 
@@ -543,17 +587,15 @@ export interface MemberSelfProfileInput {
   fullName: string;
   contactPhone: string;
   gender: Gender | '' | null | undefined;
-  contactEmail?: string | null;
 }
 
 /**
  * Validates member profile self-updates.
+ * Members cannot alter their login or contact email from self-profile update.
  * Mandatory fields:
  * - fullName
- * - contactPhone
+ * - contactPhone (10-digit Indian mobile number)
  * - gender
- * Optional field:
- * - contactEmail (validated for format only if provided)
  */
 export function validateMemberSelfProfileUpdate(input: MemberSelfProfileInput): {
   valid: boolean;
@@ -562,7 +604,6 @@ export function validateMemberSelfProfileUpdate(input: MemberSelfProfileInput): 
     fullName: string;
     contactPhone: string;
     gender: Gender | null;
-    contactEmail: string | null;
   };
 } {
   const errors: Record<string, string> = {};
@@ -574,7 +615,8 @@ export function validateMemberSelfProfileUpdate(input: MemberSelfProfileInput): 
 
   const phoneValidation = normalizePhoneNumber(input.contactPhone);
   if (!phoneValidation.valid) {
-    errors.contactPhone = phoneValidation.error || 'Valid phone number is required.';
+    errors.contactPhone =
+      phoneValidation.error || 'Valid 10-digit Indian mobile number is required.';
   }
 
   const validatedGender = validateGender(input.gender);
@@ -582,19 +624,15 @@ export function validateMemberSelfProfileUpdate(input: MemberSelfProfileInput): 
     errors.gender = 'Please select a gender option.';
   }
 
-  const trimmedEmail = (input.contactEmail || '').trim();
-  if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-    errors.contactEmail = 'Please enter a valid contact email address.';
-  }
-
   return {
     valid: Object.keys(errors).length === 0,
     errors,
     normalized: {
       fullName: trimmedName,
-      contactPhone: phoneValidation.valid ? phoneValidation.normalized : (input.contactPhone || '').trim(),
+      contactPhone: phoneValidation.valid
+        ? phoneValidation.normalized
+        : (input.contactPhone || '').trim(),
       gender: validatedGender,
-      contactEmail: trimmedEmail.length > 0 ? trimmedEmail : null,
     },
   };
 }

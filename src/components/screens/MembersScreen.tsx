@@ -6,6 +6,8 @@ import {
   GENDER_LABELS,
   validateNewChurchMember,
   buildVillageSuggestions,
+  formatIndianMobileInput,
+  normalizePhoneNumber,
 } from '../../lib/domain-logic';
 import { ReasonModal, Modal } from '../common/Modals';
 import { VillageCityInput } from '../common/VillageCityInput';
@@ -197,14 +199,45 @@ export const MembersScreen: React.FC = () => {
     e.preventDefault();
     if (!supabase || !selectedMember) return;
 
-    setIsSaving(true);
     setFormError(null);
+    setFieldErrors({});
+
+    const nextFieldErrors: Record<string, string> = {};
+    const trimmedName = fullName.trim();
+    if (!trimmedName) {
+      nextFieldErrors.fullName = 'Full Name is required.';
+    }
+
+    const trimmedPhone = contactPhone.trim();
+    let normalizedPhone: string | null = null;
+    if (trimmedPhone.length > 0) {
+      const phoneRes = normalizePhoneNumber(trimmedPhone);
+      if (!phoneRes.valid) {
+        nextFieldErrors.contactPhone =
+          phoneRes.error || 'Please enter a valid 10-digit Indian mobile number.';
+      } else {
+        normalizedPhone = phoneRes.normalized;
+      }
+    }
+
+    const trimmedEmail = contactEmail.trim();
+    if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      nextFieldErrors.contactEmail = 'Please enter a valid contact email address.';
+    }
+
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
+      setFormError(Object.values(nextFieldErrors)[0]);
+      return;
+    }
+
+    setIsSaving(true);
 
     try {
       const updatePayload: Partial<Member> = {
-        full_name: fullName.trim(),
-        contact_phone: contactPhone.trim() || null,
-        contact_email: contactEmail.trim() || null,
+        full_name: trimmedName,
+        contact_phone: normalizedPhone,
+        contact_email: trimmedEmail || null,
         date_of_birth: dateOfBirth || null,
       };
 
@@ -240,13 +273,14 @@ export const MembersScreen: React.FC = () => {
   const openEditModal = (member: Member) => {
     setSelectedMember(member);
     setFullName(member.full_name);
-    setContactPhone(member.contact_phone || '');
+    setContactPhone(formatIndianMobileInput(member.contact_phone));
     setContactEmail(member.contact_email || '');
     setVillageName(member.village_name || '');
     setGender(member.gender || '');
     setDateOfBirth(member.date_of_birth || '');
     setJoiningDate(member.joining_date);
     setFormError(null);
+    setFieldErrors({});
     setIsEditModalOpen(true);
   };
 
@@ -554,15 +588,17 @@ export const MembersScreen: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Contact Phone</label>
+                <label className="block text-slate-300 font-medium mb-1">Mobile Number</label>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={contactPhone}
                   onChange={(e) => {
-                    setContactPhone(e.target.value);
+                    setContactPhone(formatIndianMobileInput(e.target.value));
                     if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
                   }}
-                  placeholder="+91 98400 00000"
+                  placeholder="9840012345"
                   className={`w-full bg-slate-950 border ${
                     fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
                   } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
@@ -726,21 +762,40 @@ export const MembersScreen: React.FC = () => {
               <input
                 type="text"
                 value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
+                onChange={(e) => {
+                  setFullName(e.target.value);
+                  if (fieldErrors.fullName) setFieldErrors((prev) => ({ ...prev, fullName: '' }));
+                }}
                 required
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                className={`w-full bg-slate-950 border ${
+                  fieldErrors.fullName ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
               />
+              {fieldErrors.fullName && (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.fullName}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Contact Phone</label>
+                <label className="block text-slate-300 font-medium mb-1">Mobile Number</label>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
+                  onChange={(e) => {
+                    setContactPhone(formatIndianMobileInput(e.target.value));
+                    if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
+                  }}
+                  placeholder="9840012345"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
                 />
+                {fieldErrors.contactPhone && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactPhone}</p>
+                )}
               </div>
 
               <div>
@@ -748,9 +803,17 @@ export const MembersScreen: React.FC = () => {
                 <input
                   type="email"
                   value={contactEmail}
-                  onChange={(e) => setContactEmail(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                  onChange={(e) => {
+                    setContactEmail(e.target.value);
+                    if (fieldErrors.contactEmail) setFieldErrors((prev) => ({ ...prev, contactEmail: '' }));
+                  }}
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.contactEmail ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
                 />
+                {fieldErrors.contactEmail && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactEmail}</p>
+                )}
               </div>
             </div>
 

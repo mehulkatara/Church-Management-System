@@ -4,8 +4,8 @@ import { supabase } from '../../lib/supabase';
 import type { Church, Gender, AccessRequest } from '../../types/database';
 import {
   validateOnboardingProfile,
-  validateDateOfBirth,
   normalizePhoneNumber,
+  formatIndianMobileInput,
   GENDER_LABELS,
 } from '../../lib/domain-logic';
 import {
@@ -46,7 +46,6 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
   const [selectedChurchId, setSelectedChurchId] = useState<string>('');
   const [fullName, setFullName] = useState<string>('');
   const [dateOfBirth, setDateOfBirth] = useState<string>('');
-  const [phoneCountryCode, setPhoneCountryCode] = useState<string>('+91');
   const [phoneNumber, setPhoneNumber] = useState<string>('');
   const [gender, setGender] = useState<Gender | ''>('');
   const [villageName, setVillageName] = useState<string>('');
@@ -135,20 +134,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       if (existingRequest.village_name) setVillageName(existingRequest.village_name);
 
       if (existingRequest.applicant_phone) {
-        if (existingRequest.applicant_phone.startsWith('+91')) {
-          setPhoneCountryCode('+91');
-          setPhoneNumber(existingRequest.applicant_phone.slice(3).trim());
-        } else if (existingRequest.applicant_phone.startsWith('+')) {
-          const match = existingRequest.applicant_phone.match(/^(\+\d{1,4})(.*)$/);
-          if (match) {
-            setPhoneCountryCode(match[1]);
-            setPhoneNumber(match[2].trim());
-          } else {
-            setPhoneNumber(existingRequest.applicant_phone);
-          }
-        } else {
-          setPhoneNumber(existingRequest.applicant_phone);
-        }
+        setPhoneNumber(formatIndianMobileInput(existingRequest.applicant_phone));
       }
     } else {
       // Prefill full name from Google metadata
@@ -162,11 +148,6 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       }
     }
   }, [existingRequest, user, profile]);
-
-  const getFullPhone = (): string => {
-    if (!phoneNumber.trim()) return '';
-    return `${phoneCountryCode}${phoneNumber.trim()}`;
-  };
 
   const runPeopleApiImport = async (token: string, onlyFillEmpty: boolean) => {
     setIsImportingGoogle(true);
@@ -274,11 +255,11 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     setErrors({});
     setDraftSavedMessage(null);
 
-    const fullPhone = getFullPhone();
+    const formattedPhone = formatIndianMobileInput(phoneNumber);
     const draftValidation = validateOnboardingProfile({
       fullName,
       dateOfBirth,
-      phone: fullPhone,
+      phone: formattedPhone,
       gender,
       villageName,
       churchId: selectedChurchId,
@@ -298,7 +279,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       user_id: user?.id || 'unknown',
       applicant_name: fullName.trim() || 'Draft Applicant',
       applicant_email: googleEmail,
-      applicant_phone: fullPhone || null,
+      applicant_phone: formattedPhone || null,
       date_of_birth: dateOfBirth || null,
       gender: (gender as Gender) || null,
       village_name: villageName.trim() || null,
@@ -328,7 +309,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
             p_church_id: selectedChurchId,
             p_full_name: fullName.trim() || 'Draft Applicant',
             p_date_of_birth: dateOfBirth || null,
-            p_phone: fullPhone || null,
+            p_phone: formattedPhone || null,
             p_gender: gender || null,
             p_village_name: villageName.trim() || null,
             p_is_draft: true,
@@ -359,11 +340,14 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     setSubmissionSuccess(null);
     setDraftSavedMessage(null);
 
-    const fullPhone = getFullPhone();
+    const phoneCheck = normalizePhoneNumber(phoneNumber);
+    const normalizedPhone = phoneCheck.valid
+      ? phoneCheck.normalized
+      : formatIndianMobileInput(phoneNumber);
     const validation = validateOnboardingProfile({
       fullName,
       dateOfBirth,
-      phone: fullPhone,
+      phone: normalizedPhone,
       gender,
       villageName,
       churchId: selectedChurchId,
@@ -383,7 +367,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       user_id: user?.id || 'unknown',
       applicant_name: fullName.trim(),
       applicant_email: googleEmail,
-      applicant_phone: fullPhone,
+      applicant_phone: normalizedPhone,
       date_of_birth: dateOfBirth,
       gender: (gender as Gender) || null,
       village_name: villageName.trim(),
@@ -413,7 +397,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
             p_church_id: selectedChurchId,
             p_full_name: fullName.trim(),
             p_date_of_birth: dateOfBirth,
-            p_phone: fullPhone,
+            p_phone: normalizedPhone,
             p_gender: gender,
             p_village_name: villageName.trim(),
             p_is_draft: false,
@@ -673,38 +657,35 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
             </div>
           </div>
 
-          {/* 5. Contact Phone Number */}
+          {/* 5. Indian Mobile Number */}
           <div>
             <label className="block text-slate-300 font-medium mb-1.5">
-              Contact Phone Number <span className="text-red-400">*</span>
+              Mobile Number <span className="text-red-400">*</span>
             </label>
-            <div className="flex gap-2">
-              <select
-                value={phoneCountryCode}
-                onChange={(e) => setPhoneCountryCode(e.target.value)}
-                className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono shrink-0 w-28"
-              >
-                <option value="+91">🇮🇳 +91</option>
-                <option value="+1">🇺🇸 +1</option>
-                <option value="+44">🇬🇧 +44</option>
-                <option value="+971">🇦🇪 +971</option>
-                <option value="+65">🇸🇬 +65</option>
-                <option value="+61">🇦🇺 +61</option>
-              </select>
-              <div className="relative flex-1">
-                <Phone className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-                <input
-                  type="tel"
-                  value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
-                  required
-                  placeholder="98401 23456"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono"
-                />
-              </div>
+            <div className="relative">
+              <Phone className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
+              <input
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                value={phoneNumber}
+                onChange={(e) => {
+                  setPhoneNumber(formatIndianMobileInput(e.target.value));
+                  if (errors.phone) setErrors((prev) => ({ ...prev, phone: '' }));
+                }}
+                required
+                placeholder="10-digit mobile number (e.g. 9840123456)"
+                className={`w-full bg-slate-950 border rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none font-mono ${
+                  errors.phone ? 'border-red-500/60 focus:border-red-400' : 'border-slate-700 focus:border-sky-500'
+                }`}
+              />
             </div>
-            {errors.phone && (
+            {errors.phone ? (
               <p className="text-[11px] text-red-400 mt-1">{errors.phone}</p>
+            ) : (
+              <p className="text-[10px] text-slate-500 mt-1">
+                India mobile number only — enter 10 digits without +91.
+              </p>
             )}
           </div>
 
