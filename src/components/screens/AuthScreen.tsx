@@ -17,9 +17,10 @@ import {
 
 interface AuthScreenProps {
   onSuccess?: () => void;
+  onNavigate?: (path: string) => void;
 }
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate }) => {
   const { signOut, loginAsPersona, authenticateWithToken } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -372,6 +373,48 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess }) => {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Public App Home, Privacy Policy & Terms of Service Links */}
+        <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[11px] text-slate-400">
+          <a
+            href="/home"
+            onClick={(e) => {
+              if (onNavigate) {
+                e.preventDefault();
+                onNavigate('/home');
+              }
+            }}
+            className="hover:text-sky-300 transition-colors"
+          >
+            Application Home
+          </a>
+          <span className="text-slate-700">&bull;</span>
+          <a
+            href="/privacy-policy"
+            onClick={(e) => {
+              if (onNavigate) {
+                e.preventDefault();
+                onNavigate('/privacy-policy');
+              }
+            }}
+            className="hover:text-sky-300 transition-colors"
+          >
+            Privacy Policy
+          </a>
+          <span className="text-slate-700">&bull;</span>
+          <a
+            href="/terms-of-service"
+            onClick={(e) => {
+              if (onNavigate) {
+                e.preventDefault();
+                onNavigate('/terms-of-service');
+              }
+            }}
+            className="hover:text-sky-300 transition-colors"
+          >
+            Terms of Service
+          </a>
         </div>
       </div>
     </div>

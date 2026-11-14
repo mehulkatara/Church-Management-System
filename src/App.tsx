@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabaseConfig, hasOAuthCallback } from './lib/supabase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SetupRequiredScreen } from './components/common/SetupRequiredScreen';
@@ -21,16 +21,42 @@ import { ChurchManagementScreen } from './components/screens/ChurchManagementScr
 import { StaffManagementScreen } from './components/screens/StaffManagementScreen';
 import { MyProfileScreen } from './components/screens/MyProfileScreen';
 import { SettingsScreen } from './components/screens/SettingsScreen';
+import {
+  PublicHomePage,
+  PrivacyPolicyPage,
+  TermsOfServicePage,
+  PublicRoute,
+} from './components/screens/PublicPages';
 import { ShieldCheck, Eye, Database } from 'lucide-react';
+
+function resolvePublicRoute(pathname: string): PublicRoute | null {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  if (clean === '/home') return 'home';
+  if (clean === '/privacy-policy' || clean === '/privacy') return 'privacy';
+  if (clean === '/terms-of-service' || clean === '/terms') return 'terms';
+  return null;
+}
 
 const MainAppContent: React.FC<{
   previewMode?: boolean;
   onExitPreview?: () => void;
-}> = ({ previewMode = false, onExitPreview }) => {
+  publicRoute: PublicRoute | null;
+  onNavigatePath: (path: string) => void;
+}> = ({ previewMode = false, onExitPreview, publicRoute, onNavigatePath }) => {
   const { user, isLoading, activeRole, authorizedChurches, activeRequest, isPlatformAdmin } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenId>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+
+  if (publicRoute && !hasOAuthCallback()) {
+    if (publicRoute === 'home') {
+      return <PublicHomePage onNavigate={onNavigatePath} isAuthenticated={Boolean(user)} />;
+    }
+    if (publicRoute === 'privacy') {
+      return <PrivacyPolicyPage onNavigate={onNavigatePath} isAuthenticated={Boolean(user)} />;
+    }
+    return <TermsOfServicePage onNavigate={onNavigatePath} isAuthenticated={Boolean(user)} />;
+  }
 
   if (isLoading && !previewMode) {
     return (
@@ -42,7 +68,7 @@ const MainAppContent: React.FC<{
 
   // Not logged in -> Show Google Sign-in Auth Screen
   if (!user && !previewMode) {
-    return <AuthScreen />;
+    return <AuthScreen onNavigate={onNavigatePath} />;
   }
 
   // Logged in via Google, but has 0 authorized churches
@@ -170,6 +196,42 @@ const MainAppContent: React.FC<{
 
 export default function App() {
   const [isPreviewActive, setIsPreviewActive] = useState(false);
+  const [pathname, setPathname] = useState<string>(() =>
+    typeof window !== 'undefined' ? window.location.pathname : '/'
+  );
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setPathname(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (path: string) => {
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname !== path) {
+        window.history.pushState({}, '', path);
+      }
+      setPathname(path);
+      window.scrollTo(0, 0);
+    }
+  };
+
+  const publicRoute = resolvePublicRoute(pathname);
+
+  // Always allow public Home, Privacy Policy, and Terms of Service routes without login or DB setup
+  if (publicRoute && !hasOAuthCallback()) {
+    if (!supabaseConfig.isConfigured && !isPreviewActive) {
+      if (publicRoute === 'home') {
+        return <PublicHomePage onNavigate={navigateTo} isAuthenticated={false} />;
+      }
+      if (publicRoute === 'privacy') {
+        return <PrivacyPolicyPage onNavigate={navigateTo} isAuthenticated={false} />;
+      }
+      return <TermsOfServicePage onNavigate={navigateTo} isAuthenticated={false} />;
+    }
+  }
 
   // If the user arrived with an OAuth callback fragment (#access_token=) or has an active OAuth user,
   // do NOT show SetupRequiredScreen: allow AuthProvider to mount and proceed to CompleteProfileScreen!
@@ -201,6 +263,8 @@ export default function App() {
       <MainAppContent
         previewMode={isPreviewActive}
         onExitPreview={() => setIsPreviewActive(false)}
+        publicRoute={publicRoute}
+        onNavigatePath={navigateTo}
       />
     </AuthProvider>
   );
