@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Member, DonationCategory, ReceivingAccount, PaymentMethod } from '../../types/database';
@@ -34,14 +34,18 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const { activeChurch } = useAuth();
 
   // Form Fields
-  const [receiptNumber, setReceiptNumber] = useState('');
-  const [selectedMemberId, setSelectedMemberId] = useState('');
   const [donationDate, setDonationDate] = useState(() => {
     // Default to today in Asia/Kolkata
     return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   });
+  const currentFY = getFinancialYear(donationDate || new Date());
+  const suggestedPrefix = suggestReceiptPrefix(currentFY.fyCode, activeChurch?.code);
+
+  const [receiptNumber, setReceiptNumber] = useState(suggestedPrefix);
+  const prevSuggestedPrefixRef = useRef(suggestedPrefix);
+  const [selectedMemberId, setSelectedMemberId] = useState('');
   const [categoryId, setCategoryId] = useState('');
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState('500');
   const [receivingAccountId, setReceivingAccountId] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('Cash');
   const [paymentReference, setPaymentReference] = useState('');
@@ -69,10 +73,18 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
-  const currentFY = getFinancialYear(donationDate || new Date());
-  const suggestedPrefix = activeChurch
-    ? suggestReceiptPrefix(currentFY.fyCode, activeChurch.code)
-    : 'REC/2026-27/';
+  useEffect(() => {
+    const prevPrefix = prevSuggestedPrefixRef.current;
+    if (prevPrefix !== suggestedPrefix) {
+      setReceiptNumber((curr) => {
+        if (!curr.trim() || curr === prevPrefix) {
+          return suggestedPrefix;
+        }
+        return curr;
+      });
+      prevSuggestedPrefixRef.current = suggestedPrefix;
+    }
+  }, [suggestedPrefix]);
 
   // Fetch church master data
   useEffect(() => {
@@ -136,12 +148,6 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     );
   });
 
-  const handleApplyPrefix = () => {
-    if (!receiptNumber.startsWith(suggestedPrefix)) {
-      setReceiptNumber(suggestedPrefix);
-    }
-  };
-
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopiedText(label);
@@ -158,6 +164,10 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     const receiptValidation = validateReceiptNumber(receiptNumber);
     if (!receiptValidation.valid) {
       setErrorMessage(receiptValidation.error || 'Please enter a valid receipt number.');
+      return;
+    }
+    if (receiptNumber.trim() === suggestedPrefix.trim()) {
+      setErrorMessage(`Please enter the receipt number after the prefix (e.g. ${suggestedPrefix}001).`);
       return;
     }
 
@@ -253,8 +263,9 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
   const handleResetForNext = () => {
     setSavedDonation(null);
-    setReceiptNumber('');
-    setAmount('');
+    setReceiptNumber(suggestedPrefix);
+    prevSuggestedPrefixRef.current = suggestedPrefix;
+    setAmount('500');
     setPaymentReference('');
     setNotes('');
     setErrorMessage(null);
@@ -431,18 +442,9 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
         {/* 1. RECEIPT NUMBER (Prominently near top per Section 8) */}
         <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
-          <div className="flex items-center justify-between">
-            <label htmlFor="receipt-number" className="block text-xs font-semibold text-white">
-              Manual Receipt Number <span className="text-red-400">*</span>
-            </label>
-            <button
-              type="button"
-              onClick={handleApplyPrefix}
-              className="text-[11px] text-sky-400 hover:text-sky-300 underline font-mono"
-            >
-              Insert Suggestion ({suggestedPrefix})
-            </button>
-          </div>
+          <label htmlFor="receipt-number" className="block text-xs font-semibold text-white">
+            Manual Receipt Number <span className="text-red-400">*</span>
+          </label>
 
           <div className="relative">
             <Receipt className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
