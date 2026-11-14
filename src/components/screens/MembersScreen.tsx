@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Member, Gender, MembershipStatus } from '../../types/database';
-import { GENDER_LABELS, validateGender } from '../../lib/domain-logic';
+import { GENDER_LABELS, validateNewChurchMember } from '../../lib/domain-logic';
 import { ReasonModal, Modal } from '../common/Modals';
 import {
   Users,
@@ -49,6 +49,7 @@ export const MembersScreen: React.FC = () => {
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [joiningDate, setJoiningDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   // PERMISSION CHECKS
@@ -95,21 +96,38 @@ export const MembersScreen: React.FC = () => {
     e.preventDefault();
     if (!supabase || !activeChurch) return;
 
-    setIsSaving(true);
     setFormError(null);
+    setFieldErrors({});
+
+    const validation = validateNewChurchMember({
+      fullName,
+      villageName,
+      gender,
+      contactPhone,
+      contactEmail,
+      dateOfBirth,
+    });
+
+    if (!validation.valid) {
+      setFieldErrors(validation.errors);
+      setFormError(Object.values(validation.errors)[0] || 'Please fill in all mandatory fields.');
+      return;
+    }
+
+    setIsSaving(true);
 
     try {
       const memberNumber = `M-${String(members.length + 1).padStart(4, '0')}`;
 
-      const { data, error } = await supabase.from('members').insert({
+      const { error } = await supabase.from('members').insert({
         church_id: activeChurch.id,
         member_number: memberNumber,
-        full_name: fullName.trim(),
-        contact_phone: contactPhone.trim() || null,
-        contact_email: contactEmail.trim() || null,
-        village_name: canEditVillage && villageName.trim() ? villageName.trim() : null,
-        gender: canEditGender && gender ? (gender as Gender) : null,
-        date_of_birth: dateOfBirth || null,
+        full_name: validation.normalized.fullName,
+        contact_phone: validation.normalized.contactPhone,
+        contact_email: validation.normalized.contactEmail,
+        village_name: validation.normalized.villageName,
+        gender: validation.normalized.gender,
+        date_of_birth: validation.normalized.dateOfBirth,
         joining_date: joiningDate,
         membership_status: 'active', // Server default
       }).select().single();
@@ -190,6 +208,7 @@ export const MembersScreen: React.FC = () => {
     setDateOfBirth('');
     setJoiningDate(new Date().toISOString().split('T')[0]);
     setFormError(null);
+    setFieldErrors({});
   };
 
   // Open Status Change Reason Modal (ACCOUNTANT ONLY)
@@ -460,17 +479,26 @@ export const MembersScreen: React.FC = () => {
             )}
 
             <div>
-              <label className="block text-slate-300 font-medium mb-1">
+              <label htmlFor="add-member-full-name" className="block text-slate-300 font-medium mb-1">
                 Full Name <span className="text-red-400">*</span>
               </label>
               <input
+                id="add-member-full-name"
                 type="text"
                 value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
+                onChange={(e) => {
+                  setFullName(e.target.value);
+                  if (fieldErrors.fullName) setFieldErrors((prev) => ({ ...prev, fullName: '' }));
+                }}
                 required
                 placeholder="e.g. Mary Joseph"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                className={`w-full bg-slate-950 border ${
+                  fieldErrors.fullName ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
               />
+              {fieldErrors.fullName && (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.fullName}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -479,10 +507,18 @@ export const MembersScreen: React.FC = () => {
                 <input
                   type="tel"
                   value={contactPhone}
-                  onChange={(e) => setContactPhone(e.target.value)}
+                  onChange={(e) => {
+                    setContactPhone(e.target.value);
+                    if (fieldErrors.contactPhone) setFieldErrors((prev) => ({ ...prev, contactPhone: '' }));
+                  }}
                   placeholder="+91 98400 00000"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.contactPhone ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
                 />
+                {fieldErrors.contactPhone && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactPhone}</p>
+                )}
               </div>
 
               <div>
@@ -490,25 +526,43 @@ export const MembersScreen: React.FC = () => {
                 <input
                   type="email"
                   value={contactEmail}
-                  onChange={(e) => setContactEmail(e.target.value)}
+                  onChange={(e) => {
+                    setContactEmail(e.target.value);
+                    if (fieldErrors.contactEmail) setFieldErrors((prev) => ({ ...prev, contactEmail: '' }));
+                  }}
                   placeholder="contact@example.com"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.contactEmail ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
                 />
+                {fieldErrors.contactEmail && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.contactEmail}</p>
+                )}
               </div>
             </div>
 
-            {/* Village / City Name (Accountant & Admin can maintain) */}
+            {/* Village / City Name (Mandatory) */}
             <div>
-              <label className="block text-slate-300 font-medium mb-1">
-                Village / City Name <span className="text-slate-400 font-normal">(Optional Unicode text)</span>
+              <label htmlFor="add-member-village" className="block text-slate-300 font-medium mb-1">
+                Village / City Name <span className="text-red-400">*</span>
               </label>
               <input
+                id="add-member-village"
                 type="text"
                 value={villageName}
-                onChange={(e) => setVillageName(e.target.value)}
+                onChange={(e) => {
+                  setVillageName(e.target.value);
+                  if (fieldErrors.villageName) setFieldErrors((prev) => ({ ...prev, villageName: '' }));
+                }}
+                required
                 placeholder="e.g. Tambaram, Kallakurichi, or Whitefield"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                className={`w-full bg-slate-950 border ${
+                  fieldErrors.villageName ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
               />
+              {fieldErrors.villageName && (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.villageName}</p>
+              )}
             </div>
 
             {/* Date of Birth & Gender */}
@@ -521,26 +575,44 @@ export const MembersScreen: React.FC = () => {
                   type="date"
                   value={dateOfBirth}
                   max={new Date().toISOString().split('T')[0]}
-                  onChange={(e) => setDateOfBirth(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono"
+                  onChange={(e) => {
+                    setDateOfBirth(e.target.value);
+                    if (fieldErrors.dateOfBirth) setFieldErrors((prev) => ({ ...prev, dateOfBirth: '' }));
+                  }}
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.dateOfBirth ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500 font-mono`}
                 />
+                {fieldErrors.dateOfBirth && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.dateOfBirth}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">
-                  Gender <span className="text-slate-400 font-normal">(Optional)</span>
+                <label htmlFor="add-member-gender" className="block text-slate-300 font-medium mb-1">
+                  Gender <span className="text-red-400">*</span>
                 </label>
                 <select
+                  id="add-member-gender"
                   value={gender}
-                  onChange={(e) => setGender(e.target.value as Gender | '')}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                  onChange={(e) => {
+                    setGender(e.target.value as Gender | '');
+                    if (fieldErrors.gender) setFieldErrors((prev) => ({ ...prev, gender: '' }));
+                  }}
+                  required
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.gender ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
                 >
-                  <option value="">-- Not Provided (NULL) --</option>
+                  <option value="">-- Select Gender --</option>
                   <option value="male">Male</option>
                   <option value="female">Female</option>
                   <option value="other">Other</option>
                   <option value="prefer_not_to_say">Prefer not to say</option>
                 </select>
+                {fieldErrors.gender && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.gender}</p>
+                )}
               </div>
             </div>
 

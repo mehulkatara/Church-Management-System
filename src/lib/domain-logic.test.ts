@@ -17,6 +17,7 @@ import {
   validateOnboardingProfile,
   resolveReviewedField,
   validateMemberSelfProfileUpdate,
+  validateNewChurchMember,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -339,4 +340,38 @@ test('Member profile self-update requires full name, phone number, and gender', 
   assert.equal(validRes.normalized.contactEmail, null);
 });
 
+test('Add new church member requires full name, village/city name, and gender', () => {
+  const emptyRes = validateNewChurchMember({
+    fullName: '   ',
+    villageName: '  ',
+    gender: '',
+  });
+  assert.equal(emptyRes.valid, false);
+  assert.ok(emptyRes.errors.fullName);
+  assert.ok(emptyRes.errors.villageName);
+  assert.ok(emptyRes.errors.gender);
 
+  const missingVillageAndGender = validateNewChurchMember({
+    fullName: 'Mary Joseph',
+    villageName: '',
+    gender: null,
+  });
+  assert.equal(missingVillageAndGender.valid, false);
+  assert.equal(missingVillageAndGender.errors.fullName, undefined);
+  assert.ok(missingVillageAndGender.errors.villageName);
+  assert.ok(missingVillageAndGender.errors.gender);
+
+  const validMinimal = validateNewChurchMember({
+    fullName: '  Mary Joseph  ',
+    villageName: '  Tambaram  ',
+    gender: 'female',
+  });
+  assert.equal(validMinimal.valid, true);
+  assert.equal(Object.keys(validMinimal.errors).length, 0);
+  assert.equal(validMinimal.normalized.fullName, 'Mary Joseph');
+  assert.equal(validMinimal.normalized.villageName, 'Tambaram');
+  assert.equal(validMinimal.normalized.gender, 'female');
+  assert.equal(validMinimal.normalized.contactPhone, null);
+  assert.equal(validMinimal.normalized.contactEmail, null);
+  assert.equal(validMinimal.normalized.dateOfBirth, null);
+});

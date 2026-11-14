@@ -599,3 +599,85 @@ export function validateMemberSelfProfileUpdate(input: MemberSelfProfileInput): 
   };
 }
 
+export interface NewChurchMemberInput {
+  fullName: string;
+  villageName: string;
+  gender: Gender | '' | null | undefined;
+  contactPhone?: string | null;
+  contactEmail?: string | null;
+  dateOfBirth?: string | null;
+}
+
+/**
+ * Validates creating a new church member.
+ * Mandatory fields:
+ * - fullName
+ * - villageName
+ * - gender
+ */
+export function validateNewChurchMember(input: NewChurchMemberInput): {
+  valid: boolean;
+  errors: Record<string, string>;
+  normalized: {
+    fullName: string;
+    villageName: string;
+    gender: Gender | null;
+    contactPhone: string | null;
+    contactEmail: string | null;
+    dateOfBirth: string | null;
+  };
+} {
+  const errors: Record<string, string> = {};
+
+  const trimmedName = (input.fullName || '').trim();
+  if (trimmedName.length === 0) {
+    errors.fullName = 'Full Name is required.';
+  }
+
+  const trimmedVillage = (input.villageName || '').trim();
+  if (trimmedVillage.length === 0) {
+    errors.villageName = 'Village / City Name is required.';
+  }
+
+  const validatedGender = validateGender(input.gender);
+  if (!validatedGender) {
+    errors.gender = 'Gender is required.';
+  }
+
+  const trimmedPhone = (input.contactPhone || '').trim();
+  let normalizedPhone: string | null = trimmedPhone.length > 0 ? trimmedPhone : null;
+  if (trimmedPhone.length > 0) {
+    const phoneRes = normalizePhoneNumber(trimmedPhone);
+    if (!phoneRes.valid) {
+      errors.contactPhone = phoneRes.error || 'Please enter a valid phone number.';
+    } else {
+      normalizedPhone = phoneRes.normalized;
+    }
+  }
+
+  const trimmedEmail = (input.contactEmail || '').trim();
+  if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    errors.contactEmail = 'Please enter a valid contact email address.';
+  }
+
+  const trimmedDob = (input.dateOfBirth || '').trim();
+  if (trimmedDob.length > 0) {
+    const dobRes = validateDateOfBirth(trimmedDob);
+    if (!dobRes.valid) {
+      errors.dateOfBirth = dobRes.error || 'Please enter a valid date of birth.';
+    }
+  }
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    normalized: {
+      fullName: trimmedName,
+      villageName: trimmedVillage,
+      gender: validatedGender,
+      contactPhone: normalizedPhone,
+      contactEmail: trimmedEmail.length > 0 ? trimmedEmail : null,
+      dateOfBirth: trimmedDob.length > 0 ? trimmedDob : null,
+    },
+  };
+}
