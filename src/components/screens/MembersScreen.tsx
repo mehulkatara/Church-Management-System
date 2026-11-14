@@ -2,8 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Member, Gender, MembershipStatus } from '../../types/database';
-import { GENDER_LABELS, validateNewChurchMember } from '../../lib/domain-logic';
+import {
+  GENDER_LABELS,
+  validateNewChurchMember,
+  buildVillageSuggestions,
+} from '../../lib/domain-logic';
 import { ReasonModal, Modal } from '../common/Modals';
+import { VillageCityInput } from '../common/VillageCityInput';
 import {
   Users,
   Search,
@@ -23,6 +28,7 @@ export const MembersScreen: React.FC = () => {
   const { activeChurch, activeRole, isPlatformAdmin, churchAccessList } = useAuth();
 
   const [members, setMembers] = useState<Member[]>([]);
+  const [villageOptions, setVillageOptions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
@@ -87,6 +93,45 @@ export const MembersScreen: React.FC = () => {
     }
   };
 
+  const fetchVillageOptions = async () => {
+    if (!supabase || !activeChurch) return;
+    try {
+      const [membersRes, reqsRes] = await Promise.allSettled([
+        supabase
+          .from('members')
+          .select('village_name')
+          .eq('church_id', activeChurch.id)
+          .not('village_name', 'is', null),
+        supabase
+          .from('access_requests')
+          .select('village_name')
+          .eq('church_id', activeChurch.id)
+          .not('village_name', 'is', null),
+      ]);
+
+      const rawVillages: Array<string | null | undefined> = [];
+      if (membersRes.status === 'fulfilled' && !membersRes.value.error && membersRes.value.data) {
+        for (const row of membersRes.value.data as Array<{ village_name: string | null }>) {
+          rawVillages.push(row.village_name);
+        }
+      }
+      if (reqsRes.status === 'fulfilled' && !reqsRes.value.error && reqsRes.value.data) {
+        for (const row of reqsRes.value.data as Array<{ village_name: string | null }>) {
+          rawVillages.push(row.village_name);
+        }
+      }
+
+      setVillageOptions((prev) => buildVillageSuggestions([...prev, ...rawVillages]));
+    } catch (err) {
+      console.error('Error fetching village suggestions:', err);
+    }
+  };
+
+  useEffect(() => {
+    setVillageOptions([]);
+    fetchVillageOptions();
+  }, [activeChurch]);
+
   useEffect(() => {
     fetchMembers();
   }, [activeChurch, statusFilter]);
@@ -135,8 +180,11 @@ export const MembersScreen: React.FC = () => {
       if (error) throw error;
 
       setIsAddModalOpen(false);
+      if (validation.normalized.villageName) {
+        setVillageOptions((prev) => buildVillageSuggestions([...prev, validation.normalized.villageName]));
+      }
       resetForm();
-      await fetchMembers();
+      await Promise.all([fetchMembers(), fetchVillageOptions()]);
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : 'Failed to create member.');
     } finally {
@@ -176,8 +224,11 @@ export const MembersScreen: React.FC = () => {
       if (error) throw error;
 
       setIsEditModalOpen(false);
+      if (canEditVillage && villageName.trim()) {
+        setVillageOptions((prev) => buildVillageSuggestions([...prev, villageName.trim()]));
+      }
       setSelectedMember(null);
-      await fetchMembers();
+      await Promise.all([fetchMembers(), fetchVillageOptions()]);
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : 'Failed to update member.');
     } finally {
@@ -546,23 +597,27 @@ export const MembersScreen: React.FC = () => {
               <label htmlFor="add-member-village" className="block text-slate-300 font-medium mb-1">
                 Village / City Name <span className="text-red-400">*</span>
               </label>
-              <input
+              <VillageCityInput
                 id="add-member-village"
-                type="text"
                 value={villageName}
-                onChange={(e) => {
-                  setVillageName(e.target.value);
+                onChange={(nextVal) => {
+                  setVillageName(nextVal);
                   if (fieldErrors.villageName) setFieldErrors((prev) => ({ ...prev, villageName: '' }));
                 }}
+                suggestions={villageOptions}
+                onAddNewVillage={(newVillage) =>
+                  setVillageOptions((prev) => buildVillageSuggestions([...prev, newVillage]))
+                }
                 required
-                placeholder="e.g. Tambaram, Kallakurichi, or Whitefield"
-                className={`w-full bg-slate-950 border ${
-                  fieldErrors.villageName ? 'border-red-500' : 'border-slate-700'
-                } rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500`}
+                hasError={Boolean(fieldErrors.villageName)}
+                placeholder="Select from database or type a new village / city..."
               />
               {fieldErrors.villageName && (
                 <p className="text-[11px] text-red-400 mt-1">{fieldErrors.villageName}</p>
               )}
+              <p className="text-[10px] text-slate-500 mt-1">
+                Pick an existing locality from the database or type a new entry to add it.
+              </p>
             </div>
 
             {/* Date of Birth & Gender */}
@@ -701,17 +756,25 @@ export const MembersScreen: React.FC = () => {
 
             {/* Village / City Name: Admin and Accountant only; Collectors disabled */}
             <div>
-              <label className="block text-slate-300 font-medium mb-1">
+              <label htmlFor="edit-member-village" className="block text-slate-300 font-medium mb-1">
                 Village / City Name {!canEditVillage && '(Read-only for Collectors)'}
               </label>
-              <input
-                type="text"
+              <VillageCityInput
+                id="edit-member-village"
                 value={villageName}
-                onChange={(e) => setVillageName(e.target.value)}
+                onChange={setVillageName}
+                suggestions={villageOptions}
+                onAddNewVillage={(newVillage) =>
+                  setVillageOptions((prev) => buildVillageSuggestions([...prev, newVillage]))
+                }
                 disabled={!canEditVillage}
-                placeholder="e.g. Tambaram, Kallakurichi, or Whitefield"
-                className="w-full bg-slate-950 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl px-3.5 py-2 text-white focus:outline-none focus:border-sky-500"
+                placeholder="Select from database or type a new village / city..."
               />
+              {canEditVillage && (
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Choose a saved village / city from the database or add a new entry if not listed.
+                </p>
+              )}
             </div>
 
             {/* Date of Birth & Gender in Edit Modal */}

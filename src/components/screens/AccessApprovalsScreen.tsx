@@ -2,8 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { AccessRequest, Member, Gender } from '../../types/database';
-import { GENDER_LABELS, resolveReviewedField, MergeChoice } from '../../lib/domain-logic';
+import {
+  GENDER_LABELS,
+  resolveReviewedField,
+  MergeChoice,
+  buildVillageSuggestions,
+} from '../../lib/domain-logic';
 import { Modal, ReasonModal } from '../common/Modals';
+import { VillageCityInput } from '../common/VillageCityInput';
 import {
   UserCheck,
   UserX,
@@ -29,6 +35,7 @@ export const AccessApprovalsScreen: React.FC = () => {
 
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [customVillages, setCustomVillages] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'returned_for_correction'>('pending');
 
@@ -336,6 +343,12 @@ export const AccessApprovalsScreen: React.FC = () => {
     approvalMode === 'create_new' ? 'applicant' : choices.villageName,
     customValues.villageName
   );
+
+  const villageOptions = buildVillageSuggestions([
+    ...members.map((m) => m.village_name),
+    ...requests.map((r) => r.village_name),
+    ...customVillages,
+  ]);
 
   const finalGender = resolveReviewedField(
     selectedExistingMember?.gender,
@@ -905,11 +918,16 @@ export const AccessApprovalsScreen: React.FC = () => {
                           <option value="custom">Custom</option>
                         </select>
                         {choices.villageName === 'custom' && (
-                          <input
-                            type="text"
+                          <VillageCityInput
+                            compact
+                            className="mt-1"
                             value={customValues.villageName}
-                            onChange={(e) => setCustomValues({ ...customValues, villageName: e.target.value })}
-                            className="mt-1 w-full bg-slate-900 border border-slate-700 text-xs rounded px-2 py-0.5 text-white"
+                            onChange={(val) => setCustomValues({ ...customValues, villageName: val })}
+                            suggestions={villageOptions}
+                            onAddNewVillage={(newVillage) =>
+                              setCustomVillages((prev) => buildVillageSuggestions([...prev, newVillage]))
+                            }
+                            placeholder="Select or add village..."
                           />
                         )}
                       </td>

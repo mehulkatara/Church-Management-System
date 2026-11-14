@@ -681,3 +681,69 @@ export function validateNewChurchMember(input: NewChurchMemberInput): {
     },
   };
 }
+
+/**
+ * Builds a deduplicated, alphabetically sorted list of unique Village / City names
+ * from raw database records (case-insensitive deduplication preserving first clean casing).
+ */
+export function buildVillageSuggestions(rawValues: Array<string | null | undefined>): string[] {
+  const seen = new Map<string, string>();
+  for (const raw of rawValues) {
+    if (!raw || typeof raw !== 'string') continue;
+    const trimmed = raw.trim().replace(/\s+/g, ' ');
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.set(key, trimmed);
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' })
+  );
+}
+
+/**
+ * Filters database village suggestions against user input and determines
+ * whether the typed value can be added as a brand-new entry.
+ */
+export function filterVillageSuggestions(
+  suggestions: string[],
+  query: string
+): {
+  matches: string[];
+  canAddNew: boolean;
+  trimmedQuery: string;
+} {
+  const trimmedQuery = (query || '').trim().replace(/\s+/g, ' ');
+  if (!trimmedQuery) {
+    return {
+      matches: suggestions,
+      canAddNew: false,
+      trimmedQuery: '',
+    };
+  }
+
+  const lower = trimmedQuery.toLowerCase();
+  const prefixMatches: string[] = [];
+  const substringMatches: string[] = [];
+  let hasExactMatch = false;
+
+  for (const item of suggestions) {
+    const itemLower = item.toLowerCase();
+    if (itemLower === lower) {
+      hasExactMatch = true;
+    }
+    if (itemLower.startsWith(lower)) {
+      prefixMatches.push(item);
+    } else if (itemLower.includes(lower)) {
+      substringMatches.push(item);
+    }
+  }
+
+  return {
+    matches: [...prefixMatches, ...substringMatches],
+    canAddNew: !hasExactMatch,
+    trimmedQuery,
+  };
+}
+

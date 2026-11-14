@@ -18,6 +18,8 @@ import {
   resolveReviewedField,
   validateMemberSelfProfileUpdate,
   validateNewChurchMember,
+  buildVillageSuggestions,
+  filterVillageSuggestions,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -375,3 +377,34 @@ test('Add new church member requires full name, village/city name, and gender', 
   assert.equal(validMinimal.normalized.contactEmail, null);
   assert.equal(validMinimal.normalized.dateOfBirth, null);
 });
+
+test('Village / City suggestions deduplicate case-insensitively and allow adding new entries', () => {
+  const list = buildVillageSuggestions([
+    null,
+    '',
+    '  Tambaram  ',
+    'tambaram',
+    'Kallakurichi',
+    'Guindy',
+    '  Whitefield ',
+    undefined,
+  ]);
+  assert.deepEqual(list, ['Guindy', 'Kallakurichi', 'Tambaram', 'Whitefield']);
+
+  // Empty query shows full database list and cannot add blank entry
+  const emptyQuery = filterVillageSuggestions(list, '');
+  assert.deepEqual(emptyQuery.matches, ['Guindy', 'Kallakurichi', 'Tambaram', 'Whitefield']);
+  assert.equal(emptyQuery.canAddNew, false);
+
+  // Exact match (case-insensitive) disables duplicate "add new"
+  const exactMatch = filterVillageSuggestions(list, 'tambaram');
+  assert.deepEqual(exactMatch.matches, ['Tambaram']);
+  assert.equal(exactMatch.canAddNew, false);
+
+  // Partial or brand new query enables adding new entry
+  const partialNew = filterVillageSuggestions(list, '  New Colony  ');
+  assert.deepEqual(partialNew.matches, []);
+  assert.equal(partialNew.canAddNew, true);
+  assert.equal(partialNew.trimmedQuery, 'New Colony');
+});
+
