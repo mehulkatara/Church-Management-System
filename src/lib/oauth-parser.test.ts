@@ -57,6 +57,7 @@ test('parseTokenString parses full localhost URL with hash fragment', () => {
 
   assert.ok(result, 'Result should be parsed from full URL');
   assert.strictEqual(result.refreshToken, '26ssyschbbx4');
+  assert.strictEqual(result.providerToken, 'ya29.placeholder');
   assert.strictEqual(result.payload.email, '08bic019@gmail.com');
   assert.strictEqual(result.payload.user_metadata?.full_name, 'Mehul Katara');
   assert.strictEqual(result.supabaseUrl, 'https://hjbepzqiitktxlqilhzo.supabase.co');

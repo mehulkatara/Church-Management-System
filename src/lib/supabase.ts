@@ -22,6 +22,8 @@ export function decodeJwtPayload(token: string): Record<string, any> | null {
 export interface ParsedOAuthData {
   accessToken: string;
   refreshToken?: string;
+  providerToken?: string;
+  providerRefreshToken?: string;
   expiresIn?: number;
   tokenType?: string;
   payload: Record<string, any>;
@@ -41,6 +43,8 @@ export function parseTokenString(input: string): ParsedOAuthData | null {
     const params = new URLSearchParams(clean);
     const accessToken = params.get('access_token') || (clean.startsWith('ey') ? clean : null);
     const refreshToken = params.get('refresh_token') || undefined;
+    const providerToken = params.get('provider_token') || undefined;
+    const providerRefreshToken = params.get('provider_refresh_token') || undefined;
     const expiresInStr = params.get('expires_in');
     const tokenType = params.get('token_type') || 'bearer';
 
@@ -57,6 +61,8 @@ export function parseTokenString(input: string): ParsedOAuthData | null {
     return {
       accessToken,
       refreshToken,
+      providerToken,
+      providerRefreshToken,
       expiresIn: expiresInStr ? parseInt(expiresInStr, 10) : 3600,
       tokenType,
       payload,

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { supabase, supabaseConfig } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { GOOGLE_PEOPLE_SCOPES } from '../../lib/google-people';
 import {
   Church as ChurchIcon,
   AlertCircle,
@@ -59,6 +60,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess }) => {
         provider: 'google',
         options: {
           redirectTo: redirectUrl,
+          scopes: GOOGLE_PEOPLE_SCOPES.join(' '),
           queryParams: {
             access_type: 'offline',
             prompt: 'consent',

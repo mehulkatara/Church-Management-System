@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Church, Gender, AccessRequest } from '../../types/database';
@@ -8,6 +8,10 @@ import {
   normalizePhoneNumber,
   GENDER_LABELS,
 } from '../../lib/domain-logic';
+import {
+  fetchGooglePeopleProfile,
+  GOOGLE_PEOPLE_SCOPES,
+} from '../../lib/google-people';
 import {
   ShieldCheck,
   CheckCircle2,
@@ -36,7 +40,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
   existingRequest,
   onSubmitted,
 }) => {
-  const { user, profile, refreshUserData, signOut } = useAuth();
+  const { user, profile, googleProviderToken, refreshUserData, signOut } = useAuth();
 
   const [churches, setChurches] = useState<Church[]>([]);
   const [selectedChurchId, setSelectedChurchId] = useState<string>('');
@@ -50,10 +54,13 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
   const [isLoadingChurches, setIsLoadingChurches] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isSavingDraft, setIsSavingDraft] = useState<boolean>(false);
+  const [isImportingGoogle, setIsImportingGoogle] = useState<boolean>(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submissionSuccess, setSubmissionSuccess] = useState<string | null>(null);
   const [draftSavedMessage, setDraftSavedMessage] = useState<string | null>(null);
   const [googleImportNotice, setGoogleImportNotice] = useState<string | null>(null);
+  const [googleImportSuccess, setGoogleImportSuccess] = useState<string | null>(null);
+  const autoImportedTokenRef = useRef<string | null>(null);
 
   // Trusted Google email directly from auth (read-only)
   const googleEmail = user?.email || profile?.email || '';
@@ -161,13 +168,104 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     return `${phoneCountryCode}${phoneNumber.trim()}`;
   };
 
-  // Optional "Fill available details from Google" (People API check)
-  const handleGooglePeopleImport = () => {
-    // Basic sign-in does not include People API by design per specification.
-    // Display clear, non-blocking notice.
-    setGoogleImportNotice(
-      'Google People API integration is not configured for extended profile data (Date of Birth / Phone). Please enter these details manually.'
-    );
+  const runPeopleApiImport = async (token: string, onlyFillEmpty: boolean) => {
+    setIsImportingGoogle(true);
+    setGoogleImportNotice(null);
+    setGoogleImportSuccess(null);
+
+    try {
+      const peopleData = await fetchGooglePeopleProfile(token);
+      const applied: string[] = [];
+
+      if (peopleData.fullName && (!onlyFillEmpty || !fullName.trim())) {
+        setFullName(peopleData.fullName);
+        applied.push('Full Name');
+      }
+      if (peopleData.dateOfBirth && (!onlyFillEmpty || !dateOfBirth)) {
+        setDateOfBirth(peopleData.dateOfBirth);
+        applied.push('Date of Birth');
+      }
+      if (peopleData.villageOrCity && (!onlyFillEmpty || !villageName.trim())) {
+        setVillageName(peopleData.villageOrCity);
+        applied.push('Village / City Name');
+      }
+      if (peopleData.gender && (!onlyFillEmpty || !gender)) {
+        setGender(peopleData.gender);
+        applied.push('Gender');
+      }
+
+      if (applied.length > 0) {
+        setGoogleImportSuccess(
+          `Imported from Google People API: ${applied.join(', ')}.${
+            peopleData.missingFields.length > 0
+              ? ` Please fill remaining fields (${peopleData.missingFields.join(', ')}).`
+              : ''
+          }`
+        );
+      } else if (peopleData.importedFields.length > 0) {
+        setGoogleImportSuccess(
+          `Verified with Google People API (${peopleData.importedFields.join(', ')} already filled).`
+        );
+      } else {
+        setGoogleImportNotice(
+          'Your Google Account did not share Date of Birth, Address, or Gender details. Please enter them manually below.'
+        );
+      }
+    } catch (err: unknown) {
+      setGoogleImportNotice(
+        err instanceof Error
+          ? err.message
+          : 'Could not read details from Google People API. Please enter them manually.'
+      );
+    } finally {
+      setIsImportingGoogle(false);
+    }
+  };
+
+  // Automatically import from Google People API once per Google sign-in token
+  useEffect(() => {
+    if (!googleProviderToken) return;
+    if (autoImportedTokenRef.current === googleProviderToken) return;
+
+    autoImportedTokenRef.current = googleProviderToken;
+    runPeopleApiImport(googleProviderToken, true);
+  }, [googleProviderToken]);
+
+  const handleReconnectGoogleScopes = async () => {
+    if (!supabase) return;
+    setIsImportingGoogle(true);
+    setGoogleImportNotice(null);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+          scopes: GOOGLE_PEOPLE_SCOPES.join(' '),
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
+        },
+      });
+      if (error) throw error;
+    } catch (err: unknown) {
+      setGoogleImportNotice(
+        err instanceof Error ? err.message : 'Failed to reconnect with Google.'
+      );
+      setIsImportingGoogle(false);
+    }
+  };
+
+  // Manual "Fill available details from Google" button handler
+  const handleGooglePeopleImport = async () => {
+    if (!googleProviderToken) {
+      setGoogleImportSuccess(null);
+      setGoogleImportNotice(
+        'Google profile access token is not in the current session. Click "Reconnect Google" to grant People API permissions, or enter your details manually.'
+      );
+      return;
+    }
+    await runPeopleApiImport(googleProviderToken, false);
   };
 
   // Save Incomplete Draft
@@ -464,22 +562,40 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
             )}
           </div>
 
-          {/* Optional Enhanced Google Prefill */}
+          {/* Google People API Profile Prefill */}
           <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2 text-slate-400">
               <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
               <span className="text-[11px]">
-                Import details from your Google Account
+                Import Name, Date of Birth, Village / City, and Gender via Google People API
               </span>
             </div>
-            <button
-              type="button"
-              onClick={handleGooglePeopleImport}
-              className="text-[11px] font-medium text-sky-400 hover:text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 px-3 py-1.5 rounded-lg border border-sky-500/20 transition-colors cursor-pointer self-start sm:self-auto shrink-0"
-            >
-              Fill available details from Google
-            </button>
+            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+              <button
+                type="button"
+                onClick={handleGooglePeopleImport}
+                disabled={isImportingGoogle}
+                className="text-[11px] font-medium text-sky-400 hover:text-sky-300 disabled:opacity-50 bg-sky-500/10 hover:bg-sky-500/20 px-3 py-1.5 rounded-lg border border-sky-500/20 transition-colors cursor-pointer"
+              >
+                {isImportingGoogle ? 'Importing...' : 'Fill from Google'}
+              </button>
+              {!googleProviderToken && supabase && (
+                <button
+                  type="button"
+                  onClick={handleReconnectGoogleScopes}
+                  disabled={isImportingGoogle}
+                  className="text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg border border-emerald-500/20 transition-colors cursor-pointer"
+                >
+                  Reconnect Google
+                </button>
+              )}
+            </div>
           </div>
+          {googleImportSuccess && (
+            <p className="text-[11px] text-emerald-300 bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/20">
+              {googleImportSuccess}
+            </p>
+          )}
           {googleImportNotice && (
             <p className="text-[11px] text-amber-300/90 bg-amber-500/10 p-2.5 rounded-lg border border-amber-500/20">
               {googleImportNotice}

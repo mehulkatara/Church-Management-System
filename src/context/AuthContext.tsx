@@ -15,6 +15,7 @@ interface AuthContextType {
   pendingRequests: AccessRequest[];
   userRequests: AccessRequest[];
   activeRequest: AccessRequest | null;
+  googleProviderToken: string | null;
   isLoading: boolean;
   error: string | null;
   setActiveChurchId: (churchId: string) => void;
@@ -49,6 +50,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authorizedChurches, setAuthorizedChurches] = useState<Church[]>([]);
   const [activeChurch, setActiveChurch] = useState<Church | null>(null);
   const [userRequests, setUserRequests] = useState<AccessRequest[]>([]);
+  const [googleProviderToken, setGoogleProviderToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -526,6 +528,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
       }
 
+      if (oauthData.providerToken) {
+        setGoogleProviderToken(oauthData.providerToken);
+      }
       setUser(oauthUser);
       setSession(oauthSession);
       fetchUserData(oauthUser);
@@ -558,6 +563,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
+      if (session?.provider_token) {
+        setGoogleProviderToken(session.provider_token);
+      }
       if (session?.user) {
         fetchUserData(session.user);
       } else {
@@ -570,9 +578,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
+      if (session?.provider_token) {
+        setGoogleProviderToken(session.provider_token);
+      }
       if (session?.user) {
         fetchUserData(session.user);
       } else {
+        setGoogleProviderToken(null);
         setProfile(null);
         setIsPlatformAdmin(false);
         setChurchAccessList([]);
@@ -618,6 +630,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setUser(null);
     setSession(null);
+    setGoogleProviderToken(null);
     setProfile(null);
     setActiveChurch(null);
     setChurchAccessList([]);
@@ -716,6 +729,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
     }
 
+    if (oauthData.providerToken) {
+      setGoogleProviderToken(oauthData.providerToken);
+    }
     setUser(oauthUser);
     setSession(oauthSession);
     fetchUserData(oauthUser);
@@ -736,6 +752,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         pendingRequests,
         userRequests,
         activeRequest,
+        googleProviderToken,
         isLoading,
         error,
         setActiveChurchId,
