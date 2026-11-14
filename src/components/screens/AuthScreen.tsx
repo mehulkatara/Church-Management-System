@@ -19,10 +19,27 @@ interface AuthScreenProps {
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess }) => {
-  const { signOut, loginAsPersona } = useAuth();
+  const { signOut, loginAsPersona, authenticateWithToken } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfigGuide, setShowConfigGuide] = useState(false);
+  const [copiedOrigin, setCopiedOrigin] = useState(false);
+  const [pastedToken, setPastedToken] = useState('');
+  const [tokenError, setTokenError] = useState<string | null>(null);
+
+  const handlePasteLogin = () => {
+    setTokenError(null);
+    if (!pastedToken.trim()) {
+      setTokenError('Please paste the redirect URL or access token.');
+      return;
+    }
+    const success = authenticateWithToken(pastedToken.trim());
+    if (success) {
+      if (onSuccess) onSuccess();
+    } else {
+      setTokenError('Invalid token or URL. Please ensure it contains access_token=...');
+    }
+  };
 
   // Real Supabase Google OAuth sign-in flow
   const handleGoogleSignIn = async () => {
@@ -141,6 +158,86 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess }) => {
           </p>
         </div>
 
+        {/* Supabase URL Configuration Warning & 1-Click Copy */}
+        <div className="bg-amber-950/40 border border-amber-500/40 rounded-2xl p-4 text-xs text-amber-200 space-y-2.5">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <strong className="text-white block font-semibold">
+                Why does it redirect to localhost:3000?
+              </strong>
+              <p className="text-amber-200/90 leading-relaxed text-[11px]">
+                In your Supabase project, the default <strong>Site URL</strong> is set to{' '}
+                <code className="bg-slate-900 px-1 py-0.5 rounded text-amber-300 font-mono">http://localhost:3000</code>.
+                To redirect back to this live app after Google sign-in, update your Supabase settings:
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 space-y-2 text-[11px]">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-400">Your Current App URL:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.origin);
+                  setCopiedOrigin(true);
+                  setTimeout(() => setCopiedOrigin(false), 2000);
+                }}
+                className="text-sky-400 hover:text-sky-300 font-medium px-2 py-0.5 rounded bg-sky-500/10 border border-sky-500/20 text-[10px] cursor-pointer"
+              >
+                {copiedOrigin ? 'Copied!' : 'Copy App URL'}
+              </button>
+            </div>
+            <div className="font-mono text-sky-300 text-[10px] truncate bg-slate-900 p-1.5 rounded border border-slate-800">
+              {typeof window !== 'undefined' ? window.location.origin : 'https://...'}
+            </div>
+            <p className="text-slate-400 text-[10px] leading-relaxed">
+              Open <strong>Supabase Dashboard &rarr; Authentication &rarr; URL Configuration</strong> and set{' '}
+              <strong>Site URL</strong> to the App URL above, and add{' '}
+              <code className="text-sky-300 font-mono">
+                {typeof window !== 'undefined' ? `${window.location.origin}/**` : '...'}
+              </code>{' '}
+              to <strong>Redirect URLs</strong>.
+            </p>
+          </div>
+        </div>
+
+        {/* Manual Token Paste Recovery (If redirected to localhost:3000) */}
+        <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-slate-300 font-semibold flex items-center gap-1.5 text-[11px]">
+              <KeyRound className="w-3.5 h-3.5 text-sky-400" />
+              <span>Already redirected to localhost:3000?</span>
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono">Instant Token Login</span>
+          </div>
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Paste the redirected <code className="text-amber-300 font-mono">http://localhost:3000/#access_token=...</code> URL
+            here to log in immediately without re-authenticating:
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={pastedToken}
+              onChange={(e) => setPastedToken(e.target.value)}
+              placeholder="Paste localhost URL or access_token here..."
+              className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 font-mono focus:outline-none focus:border-sky-500"
+            />
+            <button
+              type="button"
+              onClick={handlePasteLogin}
+              className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs rounded-xl transition-colors cursor-pointer shrink-0"
+            >
+              Log In
+            </button>
+          </div>
+          {tokenError && (
+            <p className="text-[11px] text-red-400">{tokenError}</p>
+          )}
+        </div>
+
+
         {/* Security & Access Workflow Notice */}
         <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
           <span className="font-semibold text-slate-300 block">Strict Onboarding Separation:</span>
@@ -191,13 +288,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess }) => {
             </button>
 
             <button
+              onClick={() => handlePersonaLogin('member')}
+              className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg text-left transition-colors cursor-pointer"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <strong className="block text-indigo-400 font-medium">Verified Member</strong>
+                  <span className="text-[10px] text-slate-500">Self profile &amp; statements</span>
+                </div>
+                <Users className="w-4 h-4 text-indigo-400" />
+              </div>
+            </button>
+
+            <button
               onClick={() => handlePersonaLogin('accountant')}
-              className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg text-left transition-colors cursor-pointer col-span-2"
+              className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg text-left transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between">
                 <div>
                   <strong className="block text-emerald-400 font-medium">Church Accountant</strong>
-                  <span className="text-[10px] text-slate-500">Side-by-side member review &amp; mapping</span>
+                  <span className="text-[10px] text-slate-500">Side-by-side member review</span>
                 </div>
                 <UserCheck className="w-4 h-4 text-emerald-400" />
               </div>

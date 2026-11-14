@@ -16,6 +16,7 @@ import {
   normalizePhoneNumber,
   validateOnboardingProfile,
   resolveReviewedField,
+  validateMemberSelfProfileUpdate,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -281,4 +282,61 @@ test('Accountant side-by-side field resolution logic respects choices', () => {
     'Original Phone'
   );
 });
+
+test('Member profile self-update requires full name, phone number, and gender', () => {
+  // Missing all mandatory fields
+  const emptyRes = validateMemberSelfProfileUpdate({
+    fullName: '   ',
+    contactPhone: '',
+    gender: '',
+    contactEmail: '',
+  });
+  assert.equal(emptyRes.valid, false);
+  assert.ok(emptyRes.errors.fullName);
+  assert.ok(emptyRes.errors.contactPhone);
+  assert.ok(emptyRes.errors.gender);
+
+  // Missing gender only (must reject null/empty)
+  const missingGender = validateMemberSelfProfileUpdate({
+    fullName: 'David Paul',
+    contactPhone: '+91 98401 23456',
+    gender: '',
+  });
+  assert.equal(missingGender.valid, false);
+  assert.ok(missingGender.errors.gender);
+
+  // Invalid phone number rejected
+  const badPhone = validateMemberSelfProfileUpdate({
+    fullName: 'David Paul',
+    contactPhone: '123',
+    gender: 'male',
+  });
+  assert.equal(badPhone.valid, false);
+  assert.ok(badPhone.errors.contactPhone);
+
+  // Invalid optional contact email rejected
+  const badEmail = validateMemberSelfProfileUpdate({
+    fullName: 'David Paul',
+    contactPhone: '+91 98401 23456',
+    gender: 'male',
+    contactEmail: 'not-an-email',
+  });
+  assert.equal(badEmail.valid, false);
+  assert.ok(badEmail.errors.contactEmail);
+
+  // Valid update with prefer_not_to_say and normalized phone
+  const validRes = validateMemberSelfProfileUpdate({
+    fullName: '  David Paul  ',
+    contactPhone: '+91 98401 23456',
+    gender: 'prefer_not_to_say',
+    contactEmail: '',
+  });
+  assert.equal(validRes.valid, true);
+  assert.equal(Object.keys(validRes.errors).length, 0);
+  assert.equal(validRes.normalized.fullName, 'David Paul');
+  assert.equal(validRes.normalized.contactPhone, '+919840123456');
+  assert.equal(validRes.normalized.gender, 'prefer_not_to_say');
+  assert.equal(validRes.normalized.contactEmail, null);
+});
+
 

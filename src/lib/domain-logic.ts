@@ -538,3 +538,64 @@ export function resolveReviewedField<T>(
   }
   return existingValue ?? null;
 }
+
+export interface MemberSelfProfileInput {
+  fullName: string;
+  contactPhone: string;
+  gender: Gender | '' | null | undefined;
+  contactEmail?: string | null;
+}
+
+/**
+ * Validates member profile self-updates.
+ * Mandatory fields:
+ * - fullName
+ * - contactPhone
+ * - gender
+ * Optional field:
+ * - contactEmail (validated for format only if provided)
+ */
+export function validateMemberSelfProfileUpdate(input: MemberSelfProfileInput): {
+  valid: boolean;
+  errors: Record<string, string>;
+  normalized: {
+    fullName: string;
+    contactPhone: string;
+    gender: Gender | null;
+    contactEmail: string | null;
+  };
+} {
+  const errors: Record<string, string> = {};
+
+  const trimmedName = (input.fullName || '').trim();
+  if (trimmedName.length === 0) {
+    errors.fullName = 'Full name is required.';
+  }
+
+  const phoneValidation = normalizePhoneNumber(input.contactPhone);
+  if (!phoneValidation.valid) {
+    errors.contactPhone = phoneValidation.error || 'Valid phone number is required.';
+  }
+
+  const validatedGender = validateGender(input.gender);
+  if (!validatedGender) {
+    errors.gender = 'Please select a gender option.';
+  }
+
+  const trimmedEmail = (input.contactEmail || '').trim();
+  if (trimmedEmail.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    errors.contactEmail = 'Please enter a valid contact email address.';
+  }
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    normalized: {
+      fullName: trimmedName,
+      contactPhone: phoneValidation.valid ? phoneValidation.normalized : (input.contactPhone || '').trim(),
+      gender: validatedGender,
+      contactEmail: trimmedEmail.length > 0 ? trimmedEmail : null,
+    },
+  };
+}
+

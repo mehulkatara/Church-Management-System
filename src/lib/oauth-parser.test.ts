@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { decodeJwtPayload, parseOAuthCallback } from './supabase';
+import { decodeJwtPayload, parseOAuthCallback, parseTokenString } from './supabase';
 
 test('OAuth JWT payload decoder extracts claims accurately', () => {
   // Test token from actual Supabase Google OAuth callback provided by user
@@ -47,4 +47,17 @@ test('parseOAuthCallback parses full URL fragment and extracts tokens', () => {
 
   delete (global as any).window;
   delete (global as any).localStorage;
+});
+
+test('parseTokenString parses full localhost URL with hash fragment', () => {
+  const fullUrl =
+    'http://localhost:3000/#access_token=eyJhbGciOiJFUzI1NiIsImtpZCI6ImUyZDFjYjY1LWZkMmEtNGFlYS1iZGUzLTk5YzdkZmYxYjA3MiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2hqYmVwenFpaXRrdHhscWlsaHpvLnN1cGFiYXNlLmNvL2F1dGgvdjEiLCJzdWIiOiI2ZWIzYWI0OS0wMzE3LTQ2YTAtYWM4ZC0xZjYyYWRjZmFiNWUiLCJhdWQiOiJhdXRoZW50aWNhdGVkIiwiZXhwIjoxNzk0MzM4MjYwLCJpYXQiOjE3OTQzMzQ2NjAsImVtYWlsIjoiMDhiaWMwMTlAZ21haWwuY29tIiwicGhvbmUiOiIiLCJhcHBfbWV0YWRhdGEiOnsicHJvdmlkZXIiOiJnb29nbGUiLCJwcm92aWRlcnMiOlsiZ29vZ2xlIl19LCJ1c2VyX21ldGFkYXRhIjp7ImF2YXRhcl91cmwiOiJodHRwczovL2xoMy5nb29nbGV1c2VyY29udGVudC5jb20vYS9BQ2c4b2NKSkdxX2NycXFWTUNIWUZaOHk0cHNwWTRUdjFYaFlsNmprSEhzWHZGSDRWNm13YnlaNU1BPXM5Ni1jIiwiZW1haWwiOiIwOGJpYzAxOUBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiZnVsbF9uYW1lIjoiTWVodWwgS2F0YXJhIiwiaXNzIjoiaHR0cHM6Ly9hY2NvdW50cy5nb29nbGUuY29tIiwibmFtZSI6Ik1laHVsIEthdGFyYSIsInBob25lX3ZlcmlmaWVkIjpmYWxzZSwicGljdHVyZSI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0pKR3FfY3JxcVZNQ0hZRlo4eTRwc3BZNFR2MVhoWWw2amtISHNYdkZINFY2bXdieVo1TUE9czk2LWMiLCJwcm92aWRlcl9pZCI6IjExODE0MjU3NTkwNDUyMzU1Nzg1MiIsInN1YiI6IjExODE0MjU3NTkwNDUyMzU1Nzg1MiJ9LCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImFhbCI6ImFhbDEiLCJhbXIiOlt7Im1ldGhvZCI6Im9hdXRoIiwidGltZXN0YW1wIjoxNzk0MzM0NjYwfV0sInNlc3Npb25faWQiOiIyZmY0ZTcyMC02NWJjLTQ0M2QtYTcwYS0wZjU2YTZjMDJlZWMiLCJpc19hbm9ueW1vdXMiOmZhbHNlfQ.InVdyY7cwExM_7ZssLob-jqhKYf72xiCwuTN6M-8m-8aNQlkZpLKHT6de3dAbGKlwGcKpcSonMYtRc3vKQXyHA&expires_at=1794338260&expires_in=3600&provider_refresh_token=1%2F%2F0gUH-YODdRCeVCgYIARAAGBASSQF-L9IrjCTOA6enpebKAknCVcWUDTX6Q6rlOI3tG9ljR-AC3Fi24QK2RlI_S_l3U6_UjeSNQy-Tb43AHiEcbL-fni8pdZs67_8&provider_token=ya29.placeholder&refresh_token=26ssyschbbx4&sb=&token_type=bearer';
+
+  const result = parseTokenString(fullUrl);
+
+  assert.ok(result, 'Result should be parsed from full URL');
+  assert.strictEqual(result.refreshToken, '26ssyschbbx4');
+  assert.strictEqual(result.payload.email, '08bic019@gmail.com');
+  assert.strictEqual(result.payload.user_metadata?.full_name, 'Mehul Katara');
+  assert.strictEqual(result.supabaseUrl, 'https://hjbepzqiitktxlqilhzo.supabase.co');
 });

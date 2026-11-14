@@ -28,16 +28,18 @@ export interface ParsedOAuthData {
   supabaseUrl?: string;
 }
 
-// Parse OAuth hash fragment from URL
-export function parseOAuthCallback(): ParsedOAuthData | null {
-  if (typeof window === 'undefined') return null;
-  const hash = window.location.hash;
-  if (!hash || !hash.includes('access_token=')) return null;
-
+// Parse token from string (either full URL, hash fragment, or raw token)
+export function parseTokenString(input: string): ParsedOAuthData | null {
+  if (!input || typeof input !== 'string') return null;
   try {
-    const cleanHash = hash.startsWith('#') ? hash.slice(1) : hash;
-    const params = new URLSearchParams(cleanHash);
-    const accessToken = params.get('access_token');
+    let clean = input.trim();
+    if (clean.includes('#')) {
+      clean = clean.split('#')[1];
+    } else if (clean.includes('?')) {
+      clean = clean.split('?')[1];
+    }
+    const params = new URLSearchParams(clean);
+    const accessToken = params.get('access_token') || (clean.startsWith('ey') ? clean : null);
     const refreshToken = params.get('refresh_token') || undefined;
     const expiresInStr = params.get('expires_in');
     const tokenType = params.get('token_type') || 'bearer';
@@ -50,31 +52,44 @@ export function parseOAuthCallback(): ParsedOAuthData | null {
     let detectedUrl: string | undefined = undefined;
     if (payload.iss && typeof payload.iss === 'string') {
       detectedUrl = payload.iss.replace(/\/auth\/v1\/?$/, '');
-      try {
-        localStorage.setItem('VITE_SUPABASE_URL', detectedUrl);
-      } catch {
-        // ignore
-      }
     }
 
     return {
       accessToken,
       refreshToken,
-      expiresIn: expiresInStr ? parseInt(expiresInStr, 10) : undefined,
+      expiresIn: expiresInStr ? parseInt(expiresInStr, 10) : 3600,
       tokenType,
       payload,
       supabaseUrl: detectedUrl,
     };
   } catch (err) {
-    console.warn('Error parsing OAuth callback hash:', err);
+    console.warn('Error parsing token string:', err);
     return null;
   }
+}
+
+// Parse OAuth hash fragment from URL
+export function parseOAuthCallback(): ParsedOAuthData | null {
+  if (typeof window === 'undefined') return null;
+  const hash = window.location.hash;
+  if (!hash || !hash.includes('access_token=')) return null;
+
+  const data = parseTokenString(hash);
+  if (data?.supabaseUrl) {
+    try {
+      localStorage.setItem('VITE_SUPABASE_URL', data.supabaseUrl);
+    } catch {
+      // ignore
+    }
+  }
+  return data;
 }
 
 export function hasOAuthCallback(): boolean {
   if (typeof window === 'undefined') return false;
   return window.location.hash.includes('access_token=');
 }
+
 
 // Read Vite client environment variables with local storage & OAuth auto-detection fallbacks
 function getSupabaseUrl(): string {

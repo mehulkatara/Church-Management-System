@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
-import { supabase, supabaseConfig, parseOAuthCallback } from '../lib/supabase';
+import { supabase, supabaseConfig, parseOAuthCallback, parseTokenString } from '../lib/supabase';
 import type { Church, Profile, ChurchAccess, AccessRequest, UserRole, Gender } from '../types/database';
 
 interface AuthContextType {
@@ -21,7 +21,9 @@ interface AuthContextType {
   refreshUserData: () => Promise<void>;
   signOut: () => Promise<void>;
   loginAsPersona: (persona: string) => void;
+  authenticateWithToken: (tokenOrUrl: string) => boolean;
 }
+
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -660,6 +662,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     applyPersona(persona);
   };
 
+  const authenticateWithToken = (tokenOrUrl: string): boolean => {
+    const oauthData = parseTokenString(tokenOrUrl);
+    if (!oauthData) return false;
+
+    const payload = oauthData.payload;
+    const oauthUser: User = {
+      id: payload.sub,
+      app_metadata: payload.app_metadata || { provider: 'google', providers: ['google'] },
+      user_metadata: payload.user_metadata || {},
+      aud: payload.aud || 'authenticated',
+      confirmation_sent_at: '',
+      recovery_sent_at: '',
+      email_change_sent_at: '',
+      new_email: '',
+      invited_at: '',
+      action_link: '',
+      email: payload.email || '',
+      phone: payload.phone || '',
+      created_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+      confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+      email_confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+      phone_confirmed_at: '',
+      last_sign_in_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+      role: payload.role || 'authenticated',
+      updated_at: new Date().toISOString(),
+      identities: [],
+      factors: [],
+    };
+
+    const oauthSession: Session = {
+      access_token: oauthData.accessToken,
+      refresh_token: oauthData.refreshToken || '',
+      expires_in: oauthData.expiresIn || 3600,
+      expires_at: payload.exp || Math.floor(Date.now() / 1000) + 3600,
+      token_type: 'bearer',
+      user: oauthUser,
+    };
+
+    try {
+      localStorage.setItem('cms_oauth_user', JSON.stringify(oauthUser));
+      localStorage.setItem('cms_oauth_session', JSON.stringify(oauthSession));
+    } catch {
+      // ignore
+    }
+
+    if (supabase && oauthData.accessToken) {
+      supabase.auth.setSession({
+        access_token: oauthData.accessToken,
+        refresh_token: oauthData.refreshToken || '',
+      }).catch((err) => {
+        console.warn('Supabase setSession notice:', err);
+      });
+    }
+
+    setUser(oauthUser);
+    setSession(oauthSession);
+    fetchUserData(oauthUser);
+    return true;
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -680,6 +742,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         refreshUserData,
         signOut,
         loginAsPersona,
+        authenticateWithToken,
       }}
     >
       {children}
