@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useMemo } from '
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase, supabaseConfig, parseOAuthCallback, parseTokenString } from '../lib/supabase';
 import type { Church, Profile, ChurchAccess, AccessRequest, UserRole, Gender } from '../types/database';
+import { getHighestChurchRole } from '../lib/domain-logic';
 
 interface AuthContextType {
   user: User | null;
@@ -655,19 +656,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return userRequests.filter((r) => r.status === 'pending');
   }, [userRequests]);
 
-  // Compute active role strictly from database assignment
+  // Compute active role strictly from database assignment using role precedence
   const activeRole = useMemo<UserRole | 'none'>(() => {
     if (isPlatformAdmin) return 'platform_admin';
     if (!activeChurch) return 'none';
 
-    const assignment = churchAccessList.find(
-      (a) => a.church_id === activeChurch.id && a.status === 'approved'
-    );
+    const approvedRoles = churchAccessList
+      .filter((a) => a.church_id === activeChurch.id && a.status === 'approved')
+      .map((a) => a.role);
 
-    if (assignment) {
-      return assignment.role;
-    }
-    return 'none';
+    return getHighestChurchRole(approvedRoles);
   }, [isPlatformAdmin, activeChurch, churchAccessList]);
 
   const loginAsPersona = (persona: string) => {

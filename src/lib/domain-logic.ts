@@ -230,8 +230,9 @@ export function validateMemberStatusChange(
 export type PermittedAction =
   | 'create_church'
   | 'manage_staff_roles'
+  | 'assign_collector_role' // Admin or Accountant (from church members)
   | 'create_member'
-  | 'edit_member_basic' // Collector can edit name, contact phone, contact email
+  | 'edit_member_basic' // Collector can edit name, contact phone
   | 'change_member_status' // ONLY Accountant
   | 'edit_village_name' // Admin and Accountant
   | 'edit_gender' // Admin, Accountant, or Member (own profile)
@@ -258,6 +259,11 @@ export function checkRolePermission(
       return role === 'platform_admin' || role === 'admin'
         ? { allowed: true }
         : { allowed: false, reason: 'Requires Admin privileges.' };
+
+    case 'assign_collector_role':
+      return role === 'platform_admin' || role === 'admin' || role === 'accountant'
+        ? { allowed: true }
+        : { allowed: false, reason: 'Only Church Admins and Accountants can assign Collector access.' };
 
     case 'create_member':
       return role === 'platform_admin' || role === 'admin' || role === 'accountant'
@@ -317,6 +323,70 @@ export function checkRolePermission(
     default:
       return { allowed: false, reason: 'Action not permitted.' };
   }
+}
+
+const ROLE_PRECEDENCE: Record<string, number> = {
+  platform_admin: 0,
+  admin: 1,
+  accountant: 2,
+  collector: 3,
+  member: 4,
+};
+
+/**
+ * Resolves the highest-privilege role when a user has multiple approved roles
+ * in the same church (for example, 'member' + assigned 'collector').
+ */
+export function getHighestChurchRole(
+  roles: Array<UserRole | string | null | undefined>
+): UserRole | 'none' {
+  let best: UserRole | 'none' = 'none';
+  let bestRank = Number.MAX_SAFE_INTEGER;
+
+  for (const r of roles) {
+    if (!r || !(r in ROLE_PRECEDENCE)) continue;
+    const rank = ROLE_PRECEDENCE[r];
+    if (rank < bestRank) {
+      bestRank = rank;
+      best = r as UserRole;
+    }
+  }
+  return best;
+}
+
+/**
+ * Returns which staff roles the actor is permitted to assign within a church.
+ * Accountants can assign 'collector' (from church members).
+ * Admins and Platform Admins can assign 'collector', 'accountant', and 'admin'.
+ */
+export function getAssignableStaffRoles(
+  actorRole: UserRole | 'none',
+  isPlatformAdmin = false
+): Array<'collector' | 'accountant' | 'admin'> {
+  if (isPlatformAdmin || actorRole === 'platform_admin' || actorRole === 'admin') {
+    return ['collector', 'accountant', 'admin'];
+  }
+  if (actorRole === 'accountant') {
+    return ['collector'];
+  }
+  return [];
+}
+
+/**
+ * Checks whether the actor may suspend or restore a specific staff assignment role.
+ */
+export function canManageStaffAssignmentStatus(
+  actorRole: UserRole | 'none',
+  targetRole: string,
+  isPlatformAdmin = false
+): boolean {
+  if (isPlatformAdmin || actorRole === 'platform_admin' || actorRole === 'admin') {
+    return targetRole === 'admin' || targetRole === 'accountant' || targetRole === 'collector';
+  }
+  if (actorRole === 'accountant') {
+    return targetRole === 'collector';
+  }
+  return false;
 }
 
 /**

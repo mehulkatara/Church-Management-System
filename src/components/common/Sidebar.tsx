@@ -170,19 +170,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
 
-        {/* Platform / Church Admin Only */}
-        {isAdmin && (
+        {/* Administration (Accountants see Staff & Permissions; Admins also see Churches & Settings) */}
+        {isAccountantOrAdmin && (
           <>
             <div className="pt-3 pb-1 px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
               Administration
             </div>
 
-            <button onClick={() => handleNav('churches')} className={navItemClass('churches')}>
-              <div className="flex items-center gap-2.5">
-                <Building className="w-4 h-4" />
-                <span>Churches</span>
-              </div>
-            </button>
+            {isAdmin && (
+              <button onClick={() => handleNav('churches')} className={navItemClass('churches')}>
+                <div className="flex items-center gap-2.5">
+                  <Building className="w-4 h-4" />
+                  <span>Churches</span>
+                </div>
+              </button>
+            )}
 
             <button onClick={() => handleNav('staff')} className={navItemClass('staff')}>
               <div className="flex items-center gap-2.5">
@@ -191,12 +193,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </button>
 
-            <button onClick={() => handleNav('settings')} className={navItemClass('settings')}>
-              <div className="flex items-center gap-2.5">
-                <Settings className="w-4 h-4" />
-                <span>Church Settings</span>
-              </div>
-            </button>
+            {isAdmin && (
+              <button onClick={() => handleNav('settings')} className={navItemClass('settings')}>
+                <div className="flex items-center gap-2.5">
+                  <Settings className="w-4 h-4" />
+                  <span>Church Settings</span>
+                </div>
+              </button>
+            )}
           </>
         )}
       </nav>

@@ -20,6 +20,9 @@ import {
   validateNewChurchMember,
   buildVillageSuggestions,
   filterVillageSuggestions,
+  getHighestChurchRole,
+  getAssignableStaffRoles,
+  canManageStaffAssignmentStatus,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -417,5 +420,28 @@ test('Village / City suggestions deduplicate case-insensitively and allow adding
   assert.deepEqual(partialNew.matches, []);
   assert.equal(partialNew.canAddNew, true);
   assert.equal(partialNew.trimmedQuery, 'New Colony');
+});
+
+test('Accountant can assign and toggle Collector access while role precedence elevates promoted members', () => {
+  assert.equal(checkRolePermission('accountant', 'assign_collector_role').allowed, true);
+  assert.equal(checkRolePermission('admin', 'assign_collector_role').allowed, true);
+  assert.equal(checkRolePermission('collector', 'assign_collector_role').allowed, false);
+  assert.equal(checkRolePermission('member', 'assign_collector_role').allowed, false);
+
+  assert.deepEqual(getAssignableStaffRoles('accountant'), ['collector']);
+  assert.deepEqual(getAssignableStaffRoles('admin'), ['collector', 'accountant', 'admin']);
+  assert.deepEqual(getAssignableStaffRoles('collector'), []);
+
+  // Accountant can toggle collector status, NOT admin or accountant status
+  assert.equal(canManageStaffAssignmentStatus('accountant', 'collector'), true);
+  assert.equal(canManageStaffAssignmentStatus('accountant', 'accountant'), false);
+  assert.equal(canManageStaffAssignmentStatus('accountant', 'admin'), false);
+  assert.equal(canManageStaffAssignmentStatus('admin', 'accountant'), true);
+
+  // When a church member is also assigned Collector, highest role resolves to collector
+  assert.equal(getHighestChurchRole(['member', 'collector']), 'collector');
+  assert.equal(getHighestChurchRole(['collector', 'accountant', 'member']), 'accountant');
+  assert.equal(getHighestChurchRole(['member']), 'member');
+  assert.equal(getHighestChurchRole([]), 'none');
 });
 
