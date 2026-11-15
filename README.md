@@ -46,14 +46,10 @@ Applicant gains verified Member access to their own statements & ranking.
 
 Open the **SQL Editor** in your Supabase project dashboard:
 
-1. **Schema & RLS**: Execute `supabase/migrations/20261108000001_initial_schema.sql`.
-   - Creates the core tables, foreign keys, uniqueness constraints, and Row Level Security policies.
-2. **Atomic Procedures**: Execute `supabase/migrations/20261108000002_atomic_functions.sql`.
-   - Installs atomic business functions (`record_donation`, `change_member_status`, `correct_donation`, `cancel_donation`).
-3. **Google Auth & Onboarding**: Execute `supabase/migrations/20261109000001_google_auth_and_onboarding.sql`.
-   - Adds `date_of_birth` to `members` and `access_requests`.
-   - Adds `submission_version`, `is_draft`, `reviewed_fields_snapshot` to `access_requests`.
-   - Installs `submit_profile_request`, `approve_access_request_v2`, and `return_access_request_for_correction`.
+1. **Complete Schema, RLS & Atomic Procedures**: Execute `supabase/migrations/20261115000001_complete_schema.sql`.
+   - Creates all 18 tables, constraints, indexes, and the `auth.users` -> `public.profiles` trigger.
+   - Enables Row Level Security (RLS) on all 18 tables with role-isolated policies.
+   - Installs all atomic `SECURITY DEFINER` RPCs (`record_donation`, `correct_donation`, `cancel_donation`, `change_member_status`, `submit_profile_request`, `approve_access_request_v2`, `return_access_request_for_correction`, `update_my_member_profile`, `get_church_staff_management_data`, `assign_church_staff_role`, `toggle_church_staff_status`).
 
 ---
 

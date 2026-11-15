@@ -256,7 +256,7 @@ export const StaffManagementScreen: React.FC = () => {
           if (profs) setProfiles(profs as Profile[]);
         }
         setLoadNotice(
-          'Apply migration 20261115000001_accountant_collector_staff_management.sql in Supabase to enable church-member collector assignment.'
+          'Apply migration 20261115000001_complete_schema.sql in Supabase to enable church-member collector assignment.'
         );
         return;
       }

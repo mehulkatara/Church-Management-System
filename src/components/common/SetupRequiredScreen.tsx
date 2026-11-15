@@ -255,8 +255,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
                     Open your Supabase Project Dashboard &rarr; <strong>SQL Editor</strong> &rarr; New Query.
                     Copy and run the contents from the <strong>Database Migrations (SQL)</strong> tab:
                     <ul className="list-disc list-inside mt-1 text-slate-400 text-xs space-y-1">
-                      <li><code>supabase/migrations/20261108000001_initial_schema.sql</code> (Tables, RLS &amp; Indexes)</li>
-                      <li><code>supabase/migrations/20261108000002_atomic_functions.sql</code> (Atomic donation &amp; status RPCs)</li>
+                      <li><code>supabase/migrations/20261115000001_complete_schema.sql</code> (All 18 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
                     </ul>
                   </div>
                 </li>
@@ -333,52 +332,35 @@ WHERE email = 'admin@yourchurch.org';`}
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-white">
-                    1. Initial Schema Migration
+                    Consolidated Database Migration
                   </h3>
                   <p className="text-xs text-slate-400">
-                    File: <code>supabase/migrations/20261108000001_initial_schema.sql</code> (18 tables, constraints, RLS policies)
+                    File: <code>supabase/migrations/20261115000001_complete_schema.sql</code> (18 tables, RLS policies, triggers &amp; atomic RPCs)
                   </p>
                 </div>
                 <button
-                  onClick={() => copyToClipboard('See file: supabase/migrations/20261108000001_initial_schema.sql', 'mig1')}
+                  onClick={() => copyToClipboard('See file: supabase/migrations/20261115000001_complete_schema.sql', 'mig1')}
                   className="text-xs bg-sky-600 hover:bg-sky-500 text-white font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
                 >
                   <Copy className="w-3.5 h-3.5" />
-                  Migration File Created
+                  {copiedSection === 'mig1' ? 'Copied Path!' : 'Copy File Path'}
                 </button>
               </div>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- Key tables created:</p>
+                <p className="text-sky-400">-- Key tables created (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
                 <p>access_requests, donation_categories, receiving_accounts, donations, receipt_number_registry,</p>
                 <p>donation_revisions, audit_logs, church_settings, notifications, notification_jobs,</p>
                 <p>notification_attempts, report_exports</p>
               </div>
 
-              <div className="pt-4 border-t border-slate-800 flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-semibold text-white">
-                    2. Atomic Functions &amp; Security RPCs
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    File: <code>supabase/migrations/20261108000002_atomic_functions.sql</code> (Concurrency &amp; status rules)
-                  </p>
-                </div>
-                <button
-                  onClick={() => copyToClipboard('See file: supabase/migrations/20261108000002_atomic_functions.sql', 'mig2')}
-                  className="text-xs bg-sky-600 hover:bg-sky-500 text-white font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  Functions File Created
-                </button>
-              </div>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-emerald-400">-- Atomic procedures:</p>
-                <p>&bull; <code>record_donation()</code>: receipt reservation + revision + audit</p>
-                <p>&bull; <code>correct_donation()</code>: old receipt stays reserved + new receipt + audit</p>
-                <p>&bull; <code>cancel_donation()</code>: soft-delete + audit (receipt remains reserved)</p>
-                <p>&bull; <code>change_member_status()</code>: strictly church Accountant only (Admin alone cannot)</p>
-                <p>&bull; <code>approve_access_request()</code>: verify applicant, link account, grant member role</p>
+                <p className="text-emerald-400">-- Atomic procedures &amp; triggers included:</p>
+                <p>&bull; <code>handle_new_user()</code>: sync auth.users sign-ups into public.profiles</p>
+                <p>&bull; <code>record_donation()</code>, <code>correct_donation()</code>, <code>cancel_donation()</code></p>
+                <p>&bull; <code>change_member_status()</code> &amp; <code>update_my_member_profile()</code></p>
+                <p>&bull; <code>submit_profile_request()</code>, <code>approve_access_request_v2()</code>, <code>return_access_request_for_correction()</code></p>
+                <p>&bull; <code>get_church_staff_management_data()</code>, <code>assign_church_staff_role()</code>, <code>toggle_church_staff_status()</code></p>
               </div>
             </div>
           </div>

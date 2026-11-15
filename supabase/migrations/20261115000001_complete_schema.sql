@@ -1,0 +1,2359 @@
+-- ==============================================================================
+-- CHURCH MANAGEMENT SYSTEM - CONSOLIDATED DATABASE SCHEMA & SECURITY MIGRATION
+-- Migration: 20261115000001_complete_schema.sql
+-- Single consolidated baseline recreating:
+--   1. All 18 tables, constraints, and indexes
+--   2. Auth user -> public.profiles sync trigger
+--   3. Row Level Security (RLS) enabled on ALL 18 tables + complete policies
+--   4. Deterministic role helper functions
+--   5. All SECURITY DEFINER atomic RPCs (donations, onboarding, Indian mobile
+--      validation, read-only auth email, member self-update, and staff access)
+-- ==============================================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ==============================================================================
+-- SECTION 1: TABLES & INDEXES
+-- ==============================================================================
+
+-- 1. CHURCHES
+CREATE TABLE IF NOT EXISTS public.churches (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    address TEXT,
+    phone TEXT,
+    email TEXT,
+    receipt_prefix TEXT DEFAULT 'REC',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 2. USER PROFILES (mirrors auth.users safely)
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    phone TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 3. PLATFORM ADMINS (Explicit platform-wide privileges)
+CREATE TABLE IF NOT EXISTS public.platform_admins (
+    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    created_by UUID REFERENCES auth.users(id)
+);
+
+-- 4. CHURCH ACCESS (Church-specific roles: admin, accountant, collector, member)
+CREATE TABLE IF NOT EXISTS public.church_access (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'accountant', 'collector', 'member')),
+    status TEXT NOT NULL DEFAULT 'approved' CHECK (status IN ('approved', 'suspended')),
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    granted_by UUID REFERENCES auth.users(id),
+    notes TEXT,
+    CONSTRAINT uq_church_user_role UNIQUE (church_id, user_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_church_access_user ON public.church_access(user_id);
+CREATE INDEX IF NOT EXISTS idx_church_access_church ON public.church_access(church_id);
+
+-- 5. MEMBERS (Physical member records independent of login accounts)
+CREATE TABLE IF NOT EXISTS public.members (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE RESTRICT,
+    member_number TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    contact_phone TEXT,
+    contact_email TEXT, -- Deprecated for members (auth email lives in auth.users/profiles); kept nullable for legacy/seed compatibility
+    village_name TEXT,
+    gender TEXT CHECK (gender IN ('male', 'female', 'other', 'prefer_not_to_say')),
+    date_of_birth DATE,
+    joining_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    membership_status TEXT NOT NULL DEFAULT 'active' CHECK (membership_status IN ('active', 'inactive')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    created_by UUID REFERENCES auth.users(id),
+    updated_by UUID REFERENCES auth.users(id),
+    CONSTRAINT uq_church_member_number UNIQUE (church_id, member_number)
+);
+CREATE INDEX IF NOT EXISTS idx_members_church ON public.members(church_id);
+CREATE INDEX IF NOT EXISTS idx_members_status ON public.members(church_id, membership_status);
+
+-- 6. MEMBER ACCOUNT LINKS (1:1 mapping between auth account and member within a church)
+CREATE TABLE IF NOT EXISTS public.member_account_links (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    member_id UUID NOT NULL REFERENCES public.members(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    linked_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    linked_by UUID REFERENCES auth.users(id),
+    CONSTRAINT uq_member_account_link_church_member UNIQUE (church_id, member_id),
+    CONSTRAINT uq_member_account_link_church_user UNIQUE (church_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_member_account_links_user ON public.member_account_links(user_id);
+
+-- 7. ACCESS REQUESTS (Self-registration & Google OAuth onboarding queue)
+CREATE TABLE IF NOT EXISTS public.access_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    applicant_name TEXT NOT NULL,
+    applicant_email TEXT NOT NULL,
+    applicant_phone TEXT,
+    date_of_birth DATE,
+    gender TEXT CHECK (gender IN ('male', 'female', 'other', 'prefer_not_to_say')),
+    village_name TEXT,
+    submission_version INT NOT NULL DEFAULT 1,
+    is_draft BOOLEAN NOT NULL DEFAULT false,
+    reviewed_fields_snapshot JSONB,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('draft', 'pending', 'approved', 'rejected', 'returned_for_correction', 'suspended')),
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    decided_at TIMESTAMPTZ,
+    decided_by UUID REFERENCES auth.users(id),
+    decision_reason TEXT,
+    linked_member_id UUID REFERENCES public.members(id)
+);
+CREATE INDEX IF NOT EXISTS idx_access_requests_church_status ON public.access_requests(church_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_access_request_per_church
+    ON public.access_requests (church_id, user_id)
+    WHERE status IN ('draft', 'pending', 'returned_for_correction');
+
+-- 8. DONATION CATEGORIES
+CREATE TABLE IF NOT EXISTS public.donation_categories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    CONSTRAINT uq_church_category_code UNIQUE (church_id, code)
+);
+
+-- 9. RECEIVING ACCOUNTS
+CREATE TABLE IF NOT EXISTS public.receiving_accounts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    account_name TEXT NOT NULL,
+    account_type TEXT NOT NULL CHECK (account_type IN ('cash', 'bank')),
+    bank_name TEXT,
+    account_number_mask TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 10. DONATIONS
+CREATE TABLE IF NOT EXISTS public.donations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE RESTRICT,
+    member_id UUID NOT NULL REFERENCES public.members(id) ON DELETE RESTRICT,
+    receipt_number TEXT NOT NULL,
+    donation_date DATE NOT NULL,
+    category_id UUID NOT NULL REFERENCES public.donation_categories(id) ON DELETE RESTRICT,
+    amount NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
+    receiving_account_id UUID NOT NULL REFERENCES public.receiving_accounts(id) ON DELETE RESTRICT,
+    payment_method TEXT NOT NULL CHECK (payment_method IN ('Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Other')),
+    payment_reference TEXT,
+    notes TEXT,
+    idempotency_key TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    created_by UUID REFERENCES auth.users(id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_by UUID REFERENCES auth.users(id),
+    deleted_at TIMESTAMPTZ,
+    deleted_by UUID REFERENCES auth.users(id),
+    deletion_reason TEXT,
+    CONSTRAINT uq_donation_idempotency UNIQUE (church_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_donations_church_date ON public.donations(church_id, donation_date);
+CREATE INDEX IF NOT EXISTS idx_donations_member ON public.donations(member_id);
+CREATE INDEX IF NOT EXISTS idx_donations_active ON public.donations(church_id) WHERE deleted_at IS NULL;
+
+-- 11. RECEIPT NUMBER REGISTRY (Permanent reservation within church)
+CREATE TABLE IF NOT EXISTS public.receipt_number_registry (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE RESTRICT,
+    normalized_receipt_number TEXT NOT NULL,
+    original_receipt_number TEXT NOT NULL,
+    donation_id UUID NOT NULL REFERENCES public.donations(id) ON DELETE RESTRICT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled', 'corrected_old')),
+    reserved_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    reserved_by UUID REFERENCES auth.users(id),
+    CONSTRAINT uq_church_normalized_receipt UNIQUE (church_id, normalized_receipt_number)
+);
+CREATE INDEX IF NOT EXISTS idx_receipt_registry_lookup ON public.receipt_number_registry(church_id, normalized_receipt_number);
+
+-- 12. DONATION REVISIONS (Append-only history of creations, corrections, and cancellations)
+CREATE TABLE IF NOT EXISTS public.donation_revisions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    donation_id UUID NOT NULL REFERENCES public.donations(id) ON DELETE RESTRICT,
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE RESTRICT,
+    revision_number INT NOT NULL,
+    change_type TEXT NOT NULL CHECK (change_type IN ('created', 'corrected', 'cancelled')),
+    previous_snapshot JSONB,
+    new_snapshot JSONB NOT NULL,
+    actor_user_id UUID REFERENCES auth.users(id),
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    CONSTRAINT uq_donation_revision_seq UNIQUE (donation_id, revision_number)
+);
+CREATE INDEX IF NOT EXISTS idx_donation_revisions_donation ON public.donation_revisions(donation_id);
+
+-- 13. AUDIT LOGS (Append-only system-wide audit trail)
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID REFERENCES public.churches(id) ON DELETE SET NULL,
+    actor_user_id UUID REFERENCES auth.users(id),
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    change_summary TEXT NOT NULL,
+    previous_state JSONB,
+    new_state JSONB,
+    reason TEXT,
+    client_ip TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_church ON public.audit_logs(church_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON public.audit_logs(actor_user_id, created_at DESC);
+
+-- 14. CHURCH SETTINGS
+CREATE TABLE IF NOT EXISTS public.church_settings (
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    setting_key TEXT NOT NULL,
+    setting_value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_by UUID REFERENCES auth.users(id),
+    PRIMARY KEY (church_id, setting_key)
+);
+
+-- 15. NOTIFICATIONS
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    recipient_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    read BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON public.notifications(recipient_user_id, read);
+
+-- 16. NOTIFICATION JOBS (Durable SMS queue)
+CREATE TABLE IF NOT EXISTS public.notification_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    donation_id UUID REFERENCES public.donations(id) ON DELETE SET NULL,
+    recipient_phone TEXT NOT NULL,
+    recipient_name TEXT NOT NULL,
+    message_body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'not_configured' CHECK (status IN ('not_configured', 'queued', 'submitted', 'delivered', 'failed', 'unknown')),
+    provider TEXT,
+    external_id TEXT,
+    attempts_count INT NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+CREATE INDEX IF NOT EXISTS idx_notification_jobs_status ON public.notification_jobs(status, created_at);
+
+-- 17. NOTIFICATION ATTEMPTS
+CREATE TABLE IF NOT EXISTS public.notification_attempts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID NOT NULL REFERENCES public.notification_jobs(id) ON DELETE CASCADE,
+    attempt_number INT NOT NULL,
+    status TEXT NOT NULL,
+    response_payload JSONB,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- 18. REPORT EXPORTS (Audit of generated PDF/Excel reports)
+CREATE TABLE IF NOT EXISTS public.report_exports (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    report_type TEXT NOT NULL,
+    financial_year TEXT NOT NULL,
+    filters JSONB,
+    row_count INT NOT NULL DEFAULT 0,
+    generated_by UUID REFERENCES auth.users(id),
+    file_name TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+
+-- ==============================================================================
+-- SECTION 2: AUTH USER PROFILE TRIGGER
+-- Automatically creates a public.profiles row whenever an auth.users account is created
+-- ==============================================================================
+
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_full_name TEXT;
+BEGIN
+    v_full_name := COALESCE(
+        NULLIF(trim(NEW.raw_user_meta_data ->> 'full_name'), ''),
+        NULLIF(trim(NEW.raw_user_meta_data ->> 'name'), ''),
+        NULLIF(split_part(COALESCE(NEW.email, ''), '@', 1), ''),
+        'User'
+    );
+
+    INSERT INTO public.profiles (id, email, full_name, phone)
+    VALUES (
+        NEW.id,
+        COALESCE(NEW.email, ''),
+        v_full_name,
+        NULLIF(trim(COALESCE(NEW.raw_user_meta_data ->> 'phone', '')), '')
+    )
+    ON CONFLICT (id) DO UPDATE
+    SET
+        email = EXCLUDED.email,
+        full_name = CASE
+            WHEN length(trim(COALESCE(public.profiles.full_name, ''))) = 0 THEN EXCLUDED.full_name
+            ELSE public.profiles.full_name
+        END,
+        updated_at = timezone('utc'::text, now());
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ==============================================================================
+-- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 18 TABLES
+-- ==============================================================================
+
+ALTER TABLE public.churches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.platform_admins ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.church_access ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.member_account_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.access_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.donation_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.receiving_accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.donations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.receipt_number_registry ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.donation_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.church_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notification_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notification_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.report_exports ENABLE ROW LEVEL SECURITY;
+
+-- ==============================================================================
+-- SECTION 4: SECURITY HELPER FUNCTIONS
+-- ==============================================================================
+
+CREATE OR REPLACE FUNCTION public.is_platform_admin(p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM public.platform_admins WHERE user_id = p_user_id
+    );
+$$;
+
+-- Deterministic highest-privilege role lookup per user & church
+CREATE OR REPLACE FUNCTION public.get_auth_church_role(p_church_id UUID, p_user_id UUID)
+RETURNS TEXT
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+    SELECT role
+    FROM public.church_access
+    WHERE church_id = p_church_id
+      AND user_id = p_user_id
+      AND status = 'approved'
+    ORDER BY CASE role
+        WHEN 'admin' THEN 1
+        WHEN 'accountant' THEN 2
+        WHEN 'collector' THEN 3
+        WHEN 'member' THEN 4
+        ELSE 5
+    END
+    LIMIT 1;
+$$;
+
+-- ==============================================================================
+-- SECTION 5: RLS POLICIES
+-- Note: receipt_number_registry, notification_attempts, and report_exports
+-- intentionally have ZERO direct client policies (accessed only via SECURITY DEFINER RPCs / service role).
+-- ==============================================================================
+
+-- 1. PROFILES RLS
+DROP POLICY IF EXISTS "Users can read their own profile" ON public.profiles;
+CREATE POLICY "Users can read their own profile"
+    ON public.profiles FOR SELECT
+    USING (auth.uid() = id OR public.is_platform_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Users can insert their own profile" ON public.profiles;
+CREATE POLICY "Users can insert their own profile"
+    ON public.profiles FOR INSERT
+    WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can update their own profile basic info" ON public.profiles;
+CREATE POLICY "Users can update their own profile basic info"
+    ON public.profiles FOR UPDATE
+    USING (auth.uid() = id)
+    WITH CHECK (auth.uid() = id);
+
+-- 2. PLATFORM ADMINS RLS
+DROP POLICY IF EXISTS "Users can check their own platform admin status" ON public.platform_admins;
+CREATE POLICY "Users can check their own platform admin status"
+    ON public.platform_admins FOR SELECT
+    USING (user_id = auth.uid() OR public.is_platform_admin(auth.uid()));
+
+-- 3. CHURCHES RLS
+DROP POLICY IF EXISTS "Public/authenticated can see active churches for selection" ON public.churches;
+CREATE POLICY "Public/authenticated can see active churches for selection"
+    ON public.churches FOR SELECT
+    USING (is_active = true OR public.is_platform_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Platform admins can manage churches" ON public.churches;
+CREATE POLICY "Platform admins can manage churches"
+    ON public.churches FOR ALL
+    USING (public.is_platform_admin(auth.uid()))
+    WITH CHECK (public.is_platform_admin(auth.uid()));
+
+DROP POLICY IF EXISTS "Church admins and accountants can update church settings" ON public.churches;
+CREATE POLICY "Church admins and accountants can update church settings"
+    ON public.churches FOR UPDATE
+    USING (public.get_auth_church_role(id, auth.uid()) IN ('admin', 'accountant'))
+    WITH CHECK (public.get_auth_church_role(id, auth.uid()) IN ('admin', 'accountant'));
+
+-- 4. CHURCH ACCESS RLS
+DROP POLICY IF EXISTS "Users can view their own church access assignments" ON public.church_access;
+CREATE POLICY "Users can view their own church access assignments"
+    ON public.church_access FOR SELECT
+    USING (
+        user_id = auth.uid()
+        OR public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+-- 5. MEMBERS RLS
+DROP POLICY IF EXISTS "Staff can view members in their church" ON public.members;
+CREATE POLICY "Staff can view members in their church"
+    ON public.members FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+        OR id IN (SELECT member_id FROM public.member_account_links WHERE user_id = auth.uid() AND church_id = members.church_id)
+    );
+
+DROP POLICY IF EXISTS "Staff can create members in their church" ON public.members;
+CREATE POLICY "Staff can create members in their church"
+    ON public.members FOR INSERT
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    );
+
+DROP POLICY IF EXISTS "Staff can update members in their church" ON public.members;
+CREATE POLICY "Staff can update members in their church"
+    ON public.members FOR UPDATE
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    )
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    );
+
+-- 6. MEMBER ACCOUNT LINKS RLS
+DROP POLICY IF EXISTS "Users and church staff can read member account links" ON public.member_account_links;
+CREATE POLICY "Users and church staff can read member account links"
+    ON public.member_account_links FOR SELECT
+    USING (
+        user_id = auth.uid()
+        OR public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+-- 7. ACCESS REQUESTS RLS
+DROP POLICY IF EXISTS "Applicants can read own access requests" ON public.access_requests;
+CREATE POLICY "Applicants can read own access requests"
+    ON public.access_requests FOR SELECT
+    USING (
+        user_id = auth.uid()
+        OR public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+DROP POLICY IF EXISTS "Applicants can update own draft or returned requests" ON public.access_requests;
+CREATE POLICY "Applicants can update own draft or returned requests"
+    ON public.access_requests FOR UPDATE
+    USING (user_id = auth.uid() AND status IN ('draft', 'returned_for_correction'));
+
+DROP POLICY IF EXISTS "Church admins and accountants can update access requests" ON public.access_requests;
+CREATE POLICY "Church admins and accountants can update access requests"
+    ON public.access_requests FOR UPDATE
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    )
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+-- 8. DONATION CATEGORIES RLS
+DROP POLICY IF EXISTS "Church members and staff can view donation categories" ON public.donation_categories;
+CREATE POLICY "Church members and staff can view donation categories"
+    ON public.donation_categories FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector', 'member')
+    );
+
+DROP POLICY IF EXISTS "Church admins and accountants can manage donation categories" ON public.donation_categories;
+CREATE POLICY "Church admins and accountants can manage donation categories"
+    ON public.donation_categories FOR INSERT
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+DROP POLICY IF EXISTS "Church admins and accountants can update donation categories" ON public.donation_categories;
+CREATE POLICY "Church admins and accountants can update donation categories"
+    ON public.donation_categories FOR UPDATE
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    )
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+-- 9. RECEIVING ACCOUNTS RLS
+DROP POLICY IF EXISTS "Church members and staff can view receiving accounts" ON public.receiving_accounts;
+CREATE POLICY "Church members and staff can view receiving accounts"
+    ON public.receiving_accounts FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector', 'member')
+    );
+
+DROP POLICY IF EXISTS "Church admins and accountants can manage receiving accounts" ON public.receiving_accounts;
+CREATE POLICY "Church admins and accountants can manage receiving accounts"
+    ON public.receiving_accounts FOR INSERT
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+DROP POLICY IF EXISTS "Church admins and accountants can update receiving accounts" ON public.receiving_accounts;
+CREATE POLICY "Church admins and accountants can update receiving accounts"
+    ON public.receiving_accounts FOR UPDATE
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    )
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+-- 10. DONATIONS RLS (Reads only; writes strictly via SECURITY DEFINER RPCs)
+DROP POLICY IF EXISTS "Staff can view church donations; members can view only their own" ON public.donations;
+CREATE POLICY "Staff can view church donations; members can view only their own"
+    ON public.donations FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+        OR (
+            public.get_auth_church_role(church_id, auth.uid()) = 'member'
+            AND member_id IN (SELECT member_id FROM public.member_account_links WHERE user_id = auth.uid() AND church_id = donations.church_id)
+            AND deleted_at IS NULL
+        )
+    );
+
+-- 11. DONATION REVISIONS RLS (Append-only; readable by church staff)
+DROP POLICY IF EXISTS "Church staff can view donation revisions" ON public.donation_revisions;
+CREATE POLICY "Church staff can view donation revisions"
+    ON public.donation_revisions FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    );
+
+-- 12. AUDIT LOGS RLS (Append-only; viewable by Admin and Accountant)
+DROP POLICY IF EXISTS "Audits viewable by Admin and Accountant only" ON public.audit_logs;
+CREATE POLICY "Audits viewable by Admin and Accountant only"
+    ON public.audit_logs FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR (church_id IS NOT NULL AND public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant'))
+    );
+
+-- 13. CHURCH SETTINGS RLS
+DROP POLICY IF EXISTS "Church members and staff can view church settings" ON public.church_settings;
+CREATE POLICY "Church members and staff can view church settings"
+    ON public.church_settings FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector', 'member')
+    );
+
+DROP POLICY IF EXISTS "Church admins and accountants can insert church settings" ON public.church_settings;
+CREATE POLICY "Church admins and accountants can insert church settings"
+    ON public.church_settings FOR INSERT
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+DROP POLICY IF EXISTS "Church admins and accountants can update church settings" ON public.church_settings;
+CREATE POLICY "Church admins and accountants can update church settings"
+    ON public.church_settings FOR UPDATE
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    )
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+-- 14. NOTIFICATIONS RLS
+DROP POLICY IF EXISTS "Users can view their own notifications" ON public.notifications;
+CREATE POLICY "Users can view their own notifications"
+    ON public.notifications FOR SELECT
+    USING (recipient_user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Users can update their own notifications" ON public.notifications;
+CREATE POLICY "Users can update their own notifications"
+    ON public.notifications FOR UPDATE
+    USING (recipient_user_id = auth.uid())
+    WITH CHECK (recipient_user_id = auth.uid());
+
+-- 15. NOTIFICATION JOBS RLS
+DROP POLICY IF EXISTS "Church staff can view notification jobs" ON public.notification_jobs;
+CREATE POLICY "Church staff can view notification jobs"
+    ON public.notification_jobs FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    );
+
+DROP POLICY IF EXISTS "Church staff can update notification jobs" ON public.notification_jobs;
+CREATE POLICY "Church staff can update notification jobs"
+    ON public.notification_jobs FOR UPDATE
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    )
+    WITH CHECK (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant', 'collector')
+    );
+
+-- ==============================================================================
+-- SECTION 6: ATOMIC BUSINESS & SECURITY DEFINER RPCS
+-- ==============================================================================
+
+-- 1. RECORD DONATION (Atomic transaction with receipt reservation & audit)
+CREATE OR REPLACE FUNCTION public.record_donation(
+    p_church_id UUID,
+    p_member_id UUID,
+    p_receipt_number TEXT,
+    p_donation_date DATE,
+    p_category_id UUID,
+    p_amount NUMERIC(14, 2),
+    p_receiving_account_id UUID,
+    p_payment_method TEXT,
+    p_payment_reference TEXT DEFAULT NULL,
+    p_notes TEXT DEFAULT NULL,
+    p_idempotency_key TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_role TEXT;
+    v_normalized_receipt TEXT;
+    v_existing_donation_id UUID;
+    v_donation_id UUID;
+    v_new_donation RECORD;
+    v_member_church_id UUID;
+    v_cat_church_id UUID;
+    v_acc_church_id UUID;
+    v_cat_active BOOLEAN;
+    v_acc_active BOOLEAN;
+    v_member_name TEXT;
+    v_church_name TEXT;
+    v_cat_name TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(p_church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant', 'collector') THEN
+        RAISE EXCEPTION 'Unauthorized: You do not have permission to record donations for this church.';
+    END IF;
+
+    IF p_idempotency_key IS NOT NULL AND length(trim(p_idempotency_key)) > 0 THEN
+        SELECT id INTO v_existing_donation_id
+        FROM public.donations
+        WHERE church_id = p_church_id AND idempotency_key = p_idempotency_key;
+
+        IF v_existing_donation_id IS NOT NULL THEN
+            SELECT * INTO v_new_donation FROM public.donations WHERE id = v_existing_donation_id;
+            RETURN to_jsonb(v_new_donation);
+        END IF;
+    END IF;
+
+    IF p_amount <= 0 THEN
+        RAISE EXCEPTION 'Donation amount must be greater than zero.';
+    END IF;
+
+    IF p_receipt_number IS NULL OR length(trim(p_receipt_number)) = 0 THEN
+        RAISE EXCEPTION 'Receipt number is required.';
+    END IF;
+    v_normalized_receipt := lower(trim(p_receipt_number));
+
+    SELECT church_id, full_name INTO v_member_church_id, v_member_name
+    FROM public.members WHERE id = p_member_id;
+
+    IF v_member_church_id IS NULL OR v_member_church_id <> p_church_id THEN
+        RAISE EXCEPTION 'Invalid member: Member does not belong to this church.';
+    END IF;
+
+    SELECT church_id, is_active, name INTO v_cat_church_id, v_cat_active, v_cat_name
+    FROM public.donation_categories WHERE id = p_category_id;
+
+    IF v_cat_church_id IS NULL OR v_cat_church_id <> p_church_id THEN
+        RAISE EXCEPTION 'Invalid category: Category does not belong to this church.';
+    END IF;
+    IF NOT v_cat_active THEN
+        RAISE EXCEPTION 'Selected donation category is inactive.';
+    END IF;
+
+    SELECT church_id, is_active INTO v_acc_church_id, v_acc_active
+    FROM public.receiving_accounts WHERE id = p_receiving_account_id;
+
+    IF v_acc_church_id IS NULL OR v_acc_church_id <> p_church_id THEN
+        RAISE EXCEPTION 'Invalid receiving account: Account does not belong to this church.';
+    END IF;
+    IF NOT v_acc_active THEN
+        RAISE EXCEPTION 'Selected receiving account is inactive.';
+    END IF;
+
+    SELECT name INTO v_church_name FROM public.churches WHERE id = p_church_id;
+
+    IF EXISTS (
+        SELECT 1 FROM public.receipt_number_registry
+        WHERE church_id = p_church_id AND normalized_receipt_number = v_normalized_receipt
+    ) THEN
+        RAISE EXCEPTION 'This receipt number already exists for this church. Please check the number and try again.';
+    END IF;
+
+    INSERT INTO public.donations (
+        church_id,
+        member_id,
+        receipt_number,
+        donation_date,
+        category_id,
+        amount,
+        receiving_account_id,
+        payment_method,
+        payment_reference,
+        notes,
+        idempotency_key,
+        created_by,
+        updated_by
+    ) VALUES (
+        p_church_id,
+        p_member_id,
+        trim(p_receipt_number),
+        p_donation_date,
+        p_category_id,
+        p_amount,
+        p_receiving_account_id,
+        p_payment_method,
+        trim(p_payment_reference),
+        trim(p_notes),
+        p_idempotency_key,
+        v_actor_id,
+        v_actor_id
+    )
+    RETURNING id INTO v_donation_id;
+
+    INSERT INTO public.receipt_number_registry (
+        church_id,
+        normalized_receipt_number,
+        original_receipt_number,
+        donation_id,
+        status,
+        reserved_by
+    ) VALUES (
+        p_church_id,
+        v_normalized_receipt,
+        trim(p_receipt_number),
+        v_donation_id,
+        'active',
+        v_actor_id
+    );
+
+    SELECT * INTO v_new_donation FROM public.donations WHERE id = v_donation_id;
+
+    INSERT INTO public.donation_revisions (
+        donation_id,
+        church_id,
+        revision_number,
+        change_type,
+        previous_snapshot,
+        new_snapshot,
+        actor_user_id,
+        reason
+    ) VALUES (
+        v_donation_id,
+        p_church_id,
+        1,
+        'created',
+        NULL,
+        to_jsonb(v_new_donation),
+        v_actor_id,
+        'Initial donation entry'
+    );
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state,
+        reason
+    ) VALUES (
+        p_church_id,
+        v_actor_id,
+        'donation.created',
+        'donation',
+        v_donation_id::text,
+        'Recorded donation of INR ' || p_amount || ' with receipt ' || trim(p_receipt_number),
+        NULL,
+        to_jsonb(v_new_donation),
+        'Donation recorded'
+    );
+
+    RETURN to_jsonb(v_new_donation);
+END;
+$$;
+
+-- 2. CORRECT DONATION (Admin or Accountant only; Collectors blocked)
+CREATE OR REPLACE FUNCTION public.correct_donation(
+    p_donation_id UUID,
+    p_new_receipt_number TEXT,
+    p_new_amount NUMERIC(14, 2),
+    p_new_category_id UUID,
+    p_new_receiving_account_id UUID,
+    p_new_donation_date DATE,
+    p_new_payment_method TEXT,
+    p_new_payment_reference TEXT,
+    p_new_notes TEXT,
+    p_reason TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_old_donation RECORD;
+    v_new_donation RECORD;
+    v_church_id UUID;
+    v_role TEXT;
+    v_next_revision INT;
+    v_old_norm_receipt TEXT;
+    v_new_norm_receipt TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+        RAISE EXCEPTION 'A clear reason is required to correct a saved donation.';
+    END IF;
+
+    SELECT * INTO v_old_donation FROM public.donations WHERE id = p_donation_id;
+    IF v_old_donation.id IS NULL THEN
+        RAISE EXCEPTION 'Donation not found.';
+    END IF;
+    IF v_old_donation.deleted_at IS NOT NULL THEN
+        RAISE EXCEPTION 'Cannot edit a cancelled donation.';
+    END IF;
+
+    v_church_id := v_old_donation.church_id;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(v_church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Collectors and Members cannot edit saved donations.';
+    END IF;
+
+    v_old_norm_receipt := lower(trim(v_old_donation.receipt_number));
+    v_new_norm_receipt := lower(trim(p_new_receipt_number));
+
+    IF v_old_norm_receipt <> v_new_norm_receipt THEN
+        IF EXISTS (
+            SELECT 1 FROM public.receipt_number_registry
+            WHERE church_id = v_church_id AND normalized_receipt_number = v_new_norm_receipt
+        ) THEN
+            RAISE EXCEPTION 'This receipt number already exists for this church. Please check the number and try again.';
+        END IF;
+
+        UPDATE public.receipt_number_registry
+        SET status = 'corrected_old'
+        WHERE church_id = v_church_id AND normalized_receipt_number = v_old_norm_receipt;
+
+        INSERT INTO public.receipt_number_registry (
+            church_id,
+            normalized_receipt_number,
+            original_receipt_number,
+            donation_id,
+            status,
+            reserved_by
+        ) VALUES (
+            v_church_id,
+            v_new_norm_receipt,
+            trim(p_new_receipt_number),
+            p_donation_id,
+            'active',
+            v_actor_id
+        );
+    END IF;
+
+    UPDATE public.donations
+    SET
+        receipt_number = trim(p_new_receipt_number),
+        amount = p_new_amount,
+        category_id = p_new_category_id,
+        receiving_account_id = p_new_receiving_account_id,
+        donation_date = p_new_donation_date,
+        payment_method = p_new_payment_method,
+        payment_reference = trim(p_new_payment_reference),
+        notes = trim(p_new_notes),
+        updated_at = timezone('utc'::text, now()),
+        updated_by = v_actor_id
+    WHERE id = p_donation_id
+    RETURNING * INTO v_new_donation;
+
+    SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
+    FROM public.donation_revisions WHERE donation_id = p_donation_id;
+
+    INSERT INTO public.donation_revisions (
+        donation_id,
+        church_id,
+        revision_number,
+        change_type,
+        previous_snapshot,
+        new_snapshot,
+        actor_user_id,
+        reason
+    ) VALUES (
+        p_donation_id,
+        v_church_id,
+        v_next_revision,
+        'corrected',
+        to_jsonb(v_old_donation),
+        to_jsonb(v_new_donation),
+        v_actor_id,
+        trim(p_reason)
+    );
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state,
+        reason
+    ) VALUES (
+        v_church_id,
+        v_actor_id,
+        'donation.corrected',
+        'donation',
+        p_donation_id::text,
+        'Corrected donation ' || p_donation_id::text,
+        to_jsonb(v_old_donation),
+        to_jsonb(v_new_donation),
+        trim(p_reason)
+    );
+
+    RETURN to_jsonb(v_new_donation);
+END;
+$$;
+
+-- 3. CANCEL / SOFT-DELETE DONATION (Admin or Accountant only; permanent reservation remains)
+CREATE OR REPLACE FUNCTION public.cancel_donation(
+    p_donation_id UUID,
+    p_reason TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_old_donation RECORD;
+    v_new_donation RECORD;
+    v_church_id UUID;
+    v_role TEXT;
+    v_next_revision INT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+        RAISE EXCEPTION 'A clear reason is required to cancel a donation.';
+    END IF;
+
+    SELECT * INTO v_old_donation FROM public.donations WHERE id = p_donation_id;
+    IF v_old_donation.id IS NULL THEN
+        RAISE EXCEPTION 'Donation not found.';
+    END IF;
+    IF v_old_donation.deleted_at IS NOT NULL THEN
+        RAISE EXCEPTION 'Donation is already cancelled.';
+    END IF;
+
+    v_church_id := v_old_donation.church_id;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(v_church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Only Admin or Accountant can cancel donations.';
+    END IF;
+
+    UPDATE public.donations
+    SET
+        deleted_at = timezone('utc'::text, now()),
+        deleted_by = v_actor_id,
+        deletion_reason = trim(p_reason)
+    WHERE id = p_donation_id
+    RETURNING * INTO v_new_donation;
+
+    UPDATE public.receipt_number_registry
+    SET status = 'cancelled'
+    WHERE donation_id = p_donation_id;
+
+    SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
+    FROM public.donation_revisions WHERE donation_id = p_donation_id;
+
+    INSERT INTO public.donation_revisions (
+        donation_id,
+        church_id,
+        revision_number,
+        change_type,
+        previous_snapshot,
+        new_snapshot,
+        actor_user_id,
+        reason
+    ) VALUES (
+        p_donation_id,
+        v_church_id,
+        v_next_revision,
+        'cancelled',
+        to_jsonb(v_old_donation),
+        to_jsonb(v_new_donation),
+        v_actor_id,
+        trim(p_reason)
+    );
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state,
+        reason
+    ) VALUES (
+        v_church_id,
+        v_actor_id,
+        'donation.cancelled',
+        'donation',
+        p_donation_id::text,
+        'Cancelled donation with receipt ' || v_old_donation.receipt_number,
+        to_jsonb(v_old_donation),
+        to_jsonb(v_new_donation),
+        trim(p_reason)
+    );
+
+    RETURN to_jsonb(v_new_donation);
+END;
+$$;
+
+-- 4. CHANGE MEMBER STATUS (Strictly restricted to church Accountants)
+CREATE OR REPLACE FUNCTION public.change_member_status(
+    p_church_id UUID,
+    p_member_id UUID,
+    p_new_status TEXT,
+    p_reason TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_has_accountant_role BOOLEAN;
+    v_old_member RECORD;
+    v_new_member RECORD;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.church_access
+        WHERE church_id = p_church_id
+          AND user_id = v_actor_id
+          AND role = 'accountant'
+          AND status = 'approved'
+    ) INTO v_has_accountant_role;
+
+    IF NOT v_has_accountant_role THEN
+        RAISE EXCEPTION 'Unauthorized: Only a user with an explicit, current Accountant assignment for this church may change membership status.';
+    END IF;
+
+    IF p_new_status NOT IN ('active', 'inactive') THEN
+        RAISE EXCEPTION 'Invalid membership status. Allowed values: active, inactive.';
+    END IF;
+
+    IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+        RAISE EXCEPTION 'A clear reason is required to change membership status.';
+    END IF;
+
+    SELECT * INTO v_old_member FROM public.members
+    WHERE id = p_member_id AND church_id = p_church_id;
+
+    IF v_old_member.id IS NULL THEN
+        RAISE EXCEPTION 'Member not found in this church.';
+    END IF;
+
+    IF v_old_member.membership_status = p_new_status THEN
+        RAISE EXCEPTION 'Member is already %.', p_new_status;
+    END IF;
+
+    UPDATE public.members
+    SET
+        membership_status = p_new_status,
+        updated_at = timezone('utc'::text, now()),
+        updated_by = v_actor_id
+    WHERE id = p_member_id
+    RETURNING * INTO v_new_member;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state,
+        reason
+    ) VALUES (
+        p_church_id,
+        v_actor_id,
+        'member.status_changed',
+        'member',
+        p_member_id::text,
+        'Changed member status from ' || v_old_member.membership_status || ' to ' || p_new_status,
+        jsonb_build_object('membership_status', v_old_member.membership_status),
+        jsonb_build_object('membership_status', p_new_status),
+        trim(p_reason)
+    );
+
+    RETURN to_jsonb(v_new_member);
+END;
+$$;
+
+-- 5. SUBMIT PROFILE REQUEST (Google OAuth Onboarding + Indian 10-digit mobile validation)
+CREATE OR REPLACE FUNCTION public.submit_profile_request(
+    p_church_id UUID,
+    p_full_name TEXT,
+    p_date_of_birth DATE,
+    p_phone TEXT,
+    p_gender TEXT,
+    p_village_name TEXT,
+    p_is_draft BOOLEAN DEFAULT false
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_user_email TEXT;
+    v_existing RECORD;
+    v_status TEXT;
+    v_version INT := 1;
+    v_request_id UUID;
+    v_church_active BOOLEAN;
+    v_clean_phone TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    SELECT email INTO v_user_email FROM auth.users WHERE id = v_actor_id;
+    IF v_user_email IS NULL THEN
+        RAISE EXCEPTION 'Authenticated user identity not found.';
+    END IF;
+
+    SELECT is_active INTO v_church_active FROM public.churches WHERE id = p_church_id;
+    IF v_church_active IS NULL OR NOT v_church_active THEN
+        RAISE EXCEPTION 'Selected church does not exist or is inactive.';
+    END IF;
+
+    v_clean_phone := NULLIF(regexp_replace(trim(COALESCE(p_phone, '')), '[\s\-()]', '', 'g'), '');
+    IF v_clean_phone IS NOT NULL THEN
+        IF v_clean_phone ~ '^\+91[0-9]{10}$' THEN
+            v_clean_phone := substr(v_clean_phone, 4);
+        ELSIF v_clean_phone ~ '^91[0-9]{10}$' THEN
+            v_clean_phone := substr(v_clean_phone, 3);
+        ELSIF v_clean_phone ~ '^0[0-9]{10}$' THEN
+            v_clean_phone := substr(v_clean_phone, 2);
+        END IF;
+    END IF;
+
+    IF NOT p_is_draft THEN
+        IF p_full_name IS NULL OR length(trim(p_full_name)) = 0 THEN
+            RAISE EXCEPTION 'Full name is required.';
+        END IF;
+
+        IF p_date_of_birth IS NULL THEN
+            RAISE EXCEPTION 'Date of birth is required.';
+        END IF;
+
+        IF p_date_of_birth > CURRENT_DATE THEN
+            RAISE EXCEPTION 'Date of birth cannot be in the future.';
+        END IF;
+
+        IF p_date_of_birth < (CURRENT_DATE - INTERVAL '150 years') THEN
+            RAISE EXCEPTION 'Please enter a valid date of birth.';
+        END IF;
+
+        IF v_clean_phone IS NULL OR v_clean_phone !~ '^[6-9][0-9]{9}$' OR v_clean_phone ~ '^([0-9])\1{9}$' THEN
+            RAISE EXCEPTION 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).';
+        END IF;
+
+        IF p_gender IS NULL OR p_gender NOT IN ('male', 'female', 'other', 'prefer_not_to_say') THEN
+            RAISE EXCEPTION 'Explicit gender selection is required.';
+        END IF;
+
+        IF p_village_name IS NULL OR length(trim(p_village_name)) = 0 THEN
+            RAISE EXCEPTION 'Village / City Name is required.';
+        END IF;
+
+        v_status := 'pending';
+    ELSE
+        v_status := 'draft';
+    END IF;
+
+    SELECT * INTO v_existing
+    FROM public.access_requests
+    WHERE church_id = p_church_id AND user_id = v_actor_id AND status IN ('draft', 'pending', 'returned_for_correction')
+    LIMIT 1;
+
+    IF v_existing.id IS NOT NULL THEN
+        v_version := v_existing.submission_version + 1;
+
+        UPDATE public.access_requests
+        SET
+            applicant_name = trim(p_full_name),
+            applicant_email = v_user_email,
+            applicant_phone = v_clean_phone,
+            date_of_birth = p_date_of_birth,
+            gender = p_gender,
+            village_name = trim(p_village_name),
+            is_draft = p_is_draft,
+            status = v_status,
+            submission_version = v_version,
+            requested_at = timezone('utc'::text, now()),
+            decision_reason = NULL
+        WHERE id = v_existing.id
+        RETURNING id INTO v_request_id;
+    ELSE
+        INSERT INTO public.access_requests (
+            church_id,
+            user_id,
+            applicant_name,
+            applicant_email,
+            applicant_phone,
+            date_of_birth,
+            gender,
+            village_name,
+            is_draft,
+            status,
+            submission_version,
+            requested_at
+        ) VALUES (
+            p_church_id,
+            v_actor_id,
+            trim(p_full_name),
+            v_user_email,
+            v_clean_phone,
+            p_date_of_birth,
+            p_gender,
+            trim(p_village_name),
+            p_is_draft,
+            v_status,
+            1,
+            timezone('utc'::text, now())
+        )
+        RETURNING id INTO v_request_id;
+    END IF;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        new_state,
+        reason
+    ) VALUES (
+        p_church_id,
+        v_actor_id,
+        CASE WHEN p_is_draft THEN 'access_request.draft_saved' ELSE 'access_request.submitted' END,
+        'access_request',
+        v_request_id::text,
+        CASE WHEN p_is_draft THEN 'Saved onboarding profile draft' ELSE 'Submitted onboarding profile (version ' || v_version || ')' END,
+        jsonb_build_object(
+            'status', v_status,
+            'version', v_version,
+            'is_draft', p_is_draft,
+            'village_name', trim(p_village_name)
+        ),
+        'User onboarding'
+    );
+
+    RETURN jsonb_build_object('success', true, 'request_id', v_request_id, 'status', v_status, 'version', v_version);
+END;
+$$;
+
+-- 6. APPROVE ACCESS REQUEST (Legacy signature preserved; clears member contact_email)
+CREATE OR REPLACE FUNCTION public.approve_access_request(
+    p_request_id UUID,
+    p_member_id UUID,
+    p_create_member_name TEXT DEFAULT NULL,
+    p_village_name TEXT DEFAULT NULL,
+    p_gender TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_req RECORD;
+    v_final_member_id UUID;
+    v_has_accountant_role BOOLEAN;
+    v_member_number TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    SELECT * INTO v_req FROM public.access_requests WHERE id = p_request_id;
+    IF v_req.id IS NULL THEN
+        RAISE EXCEPTION 'Access request not found.';
+    END IF;
+    IF v_req.status <> 'pending' THEN
+        RAISE EXCEPTION 'Request is already resolved.';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.church_access
+        WHERE church_id = v_req.church_id AND user_id = v_actor_id AND role = 'accountant' AND status = 'approved'
+    ) INTO v_has_accountant_role;
+
+    IF NOT v_has_accountant_role AND NOT public.is_platform_admin(v_actor_id) THEN
+        RAISE EXCEPTION 'Unauthorized: Only church Accountants can approve member access requests.';
+    END IF;
+
+    IF p_member_id IS NOT NULL THEN
+        v_final_member_id := p_member_id;
+        IF p_village_name IS NOT NULL AND length(trim(p_village_name)) > 0 THEN
+            UPDATE public.members SET village_name = trim(p_village_name) WHERE id = v_final_member_id;
+        END IF;
+        IF p_gender IS NOT NULL AND p_gender IN ('male', 'female', 'other', 'prefer_not_to_say') THEN
+            UPDATE public.members SET gender = p_gender WHERE id = v_final_member_id;
+        END IF;
+        UPDATE public.members SET contact_email = NULL WHERE id = v_final_member_id;
+    ELSE
+        v_member_number := 'M-' || lpad((COALESCE((SELECT COUNT(*) FROM public.members WHERE church_id = v_req.church_id), 0) + 1)::text, 4, '0');
+
+        INSERT INTO public.members (
+            church_id,
+            member_number,
+            full_name,
+            contact_phone,
+            contact_email,
+            village_name,
+            gender,
+            joining_date,
+            membership_status,
+            created_by,
+            updated_by
+        ) VALUES (
+            v_req.church_id,
+            v_member_number,
+            COALESCE(trim(p_create_member_name), v_req.applicant_name),
+            v_req.applicant_phone,
+            NULL,
+            trim(p_village_name),
+            p_gender,
+            CURRENT_DATE,
+            'active',
+            v_actor_id,
+            v_actor_id
+        )
+        RETURNING id INTO v_final_member_id;
+    END IF;
+
+    INSERT INTO public.member_account_links (
+        church_id,
+        member_id,
+        user_id,
+        linked_by
+    ) VALUES (
+        v_req.church_id,
+        v_final_member_id,
+        v_req.user_id,
+        v_actor_id
+    );
+
+    INSERT INTO public.church_access (
+        church_id,
+        user_id,
+        role,
+        status,
+        granted_by,
+        notes
+    ) VALUES (
+        v_req.church_id,
+        v_req.user_id,
+        'member',
+        'approved',
+        v_actor_id,
+        'Approved by Accountant'
+    )
+    ON CONFLICT (church_id, user_id, role) DO UPDATE SET status = 'approved';
+
+    UPDATE public.access_requests
+    SET
+        status = 'approved',
+        decided_at = timezone('utc'::text, now()),
+        decided_by = v_actor_id,
+        linked_member_id = v_final_member_id
+    WHERE id = p_request_id;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        new_state,
+        reason
+    ) VALUES (
+        v_req.church_id,
+        v_actor_id,
+        'access_request.approved',
+        'access_request',
+        p_request_id::text,
+        'Approved member access for ' || v_req.applicant_name,
+        jsonb_build_object('member_id', v_final_member_id, 'user_id', v_req.user_id),
+        'Accountant verified applicant'
+    );
+
+    RETURN jsonb_build_object('success', true, 'member_id', v_final_member_id);
+END;
+$$;
+
+-- 7. APPROVE ACCESS REQUEST V2 (Field-by-field review, Indian mobile validation, no duplicate member contact_email)
+CREATE OR REPLACE FUNCTION public.approve_access_request_v2(
+    p_request_id UUID,
+    p_expected_version INT,
+    p_member_id UUID DEFAULT NULL,
+    p_create_new BOOLEAN DEFAULT false,
+    p_final_full_name TEXT DEFAULT NULL,
+    p_final_date_of_birth DATE DEFAULT NULL,
+    p_final_phone TEXT DEFAULT NULL,
+    p_final_contact_email TEXT DEFAULT NULL,
+    p_final_village_name TEXT DEFAULT NULL,
+    p_final_gender TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_req RECORD;
+    v_final_member_id UUID;
+    v_has_accountant_role BOOLEAN;
+    v_member_number TEXT;
+    v_old_member RECORD;
+    v_target_church_id UUID;
+    v_clean_phone TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    SELECT * INTO v_req
+    FROM public.access_requests
+    WHERE id = p_request_id
+    FOR UPDATE;
+
+    IF v_req.id IS NULL THEN
+        RAISE EXCEPTION 'Access request not found.';
+    END IF;
+
+    IF v_req.status <> 'pending' THEN
+        RAISE EXCEPTION 'Request is not in pending status (Current: %).', v_req.status;
+    END IF;
+
+    IF v_req.submission_version <> p_expected_version THEN
+        RAISE EXCEPTION 'Stale review: The applicant updated their application (version % -> %). Please review the latest submission.',
+            p_expected_version, v_req.submission_version;
+    END IF;
+
+    v_target_church_id := v_req.church_id;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.church_access
+        WHERE church_id = v_target_church_id AND user_id = v_actor_id AND role = 'accountant' AND status = 'approved'
+    ) INTO v_has_accountant_role;
+
+    IF NOT v_has_accountant_role AND NOT public.is_platform_admin(v_actor_id) THEN
+        RAISE EXCEPTION 'Unauthorized: Only church Accountants can approve member access requests.';
+    END IF;
+
+    IF p_final_full_name IS NULL OR length(trim(p_final_full_name)) = 0 THEN
+        RAISE EXCEPTION 'Final reviewed full name is required.';
+    END IF;
+    IF p_final_date_of_birth IS NULL THEN
+        RAISE EXCEPTION 'Final reviewed date of birth is required.';
+    END IF;
+
+    v_clean_phone := regexp_replace(trim(COALESCE(p_final_phone, '')), '[\s\-()]', '', 'g');
+    IF v_clean_phone ~ '^\+91[0-9]{10}$' THEN
+        v_clean_phone := substr(v_clean_phone, 4);
+    ELSIF v_clean_phone ~ '^91[0-9]{10}$' THEN
+        v_clean_phone := substr(v_clean_phone, 3);
+    ELSIF v_clean_phone ~ '^0[0-9]{10}$' THEN
+        v_clean_phone := substr(v_clean_phone, 2);
+    END IF;
+
+    IF v_clean_phone !~ '^[6-9][0-9]{9}$' OR v_clean_phone ~ '^([0-9])\1{9}$' THEN
+        RAISE EXCEPTION 'Final reviewed mobile number must be a valid 10-digit Indian mobile number.';
+    END IF;
+
+    IF p_final_village_name IS NULL OR length(trim(p_final_village_name)) = 0 THEN
+        RAISE EXCEPTION 'Final reviewed Village / City Name is required.';
+    END IF;
+    IF p_final_gender IS NULL OR p_final_gender NOT IN ('male', 'female', 'other', 'prefer_not_to_say') THEN
+        RAISE EXCEPTION 'Final reviewed gender must be one of: male, female, other, prefer_not_to_say.';
+    END IF;
+
+    IF p_create_new THEN
+        v_member_number := 'M-' || lpad((COALESCE((SELECT COUNT(*) FROM public.members WHERE church_id = v_target_church_id), 0) + 1)::text, 4, '0');
+
+        INSERT INTO public.members (
+            church_id,
+            member_number,
+            full_name,
+            contact_phone,
+            contact_email,
+            village_name,
+            gender,
+            date_of_birth,
+            joining_date,
+            membership_status,
+            created_by,
+            updated_by
+        ) VALUES (
+            v_target_church_id,
+            v_member_number,
+            trim(p_final_full_name),
+            v_clean_phone,
+            NULL,
+            trim(p_final_village_name),
+            p_final_gender,
+            p_final_date_of_birth,
+            CURRENT_DATE,
+            'active',
+            v_actor_id,
+            v_actor_id
+        )
+        RETURNING id INTO v_final_member_id;
+    ELSE
+        IF p_member_id IS NULL THEN
+            RAISE EXCEPTION 'Existing member selection required for mapping.';
+        END IF;
+
+        SELECT * INTO v_old_member
+        FROM public.members
+        WHERE id = p_member_id;
+
+        IF v_old_member.id IS NULL OR v_old_member.church_id <> v_target_church_id THEN
+            RAISE EXCEPTION 'Selected member does not belong to this church.';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM public.member_account_links
+            WHERE church_id = v_target_church_id AND member_id = p_member_id AND user_id <> v_req.user_id
+        ) THEN
+            RAISE EXCEPTION 'This member is already linked to another user account in this church.';
+        END IF;
+
+        v_final_member_id := p_member_id;
+
+        UPDATE public.members
+        SET
+            full_name = trim(p_final_full_name),
+            contact_phone = v_clean_phone,
+            contact_email = NULL,
+            village_name = trim(p_final_village_name),
+            gender = p_final_gender,
+            date_of_birth = p_final_date_of_birth,
+            updated_at = timezone('utc'::text, now()),
+            updated_by = v_actor_id
+        WHERE id = v_final_member_id;
+    END IF;
+
+    DELETE FROM public.member_account_links
+    WHERE church_id = v_target_church_id AND user_id = v_req.user_id;
+
+    INSERT INTO public.member_account_links (
+        church_id,
+        member_id,
+        user_id,
+        linked_by
+    ) VALUES (
+        v_target_church_id,
+        v_final_member_id,
+        v_req.user_id,
+        v_actor_id
+    );
+
+    INSERT INTO public.church_access (
+        church_id,
+        user_id,
+        role,
+        status,
+        granted_by,
+        notes
+    ) VALUES (
+        v_target_church_id,
+        v_req.user_id,
+        'member',
+        'approved',
+        v_actor_id,
+        'Approved by Accountant via Google OAuth onboarding'
+    )
+    ON CONFLICT (church_id, user_id, role) DO UPDATE
+    SET status = 'approved', granted_at = timezone('utc'::text, now());
+
+    UPDATE public.access_requests
+    SET
+        status = 'approved',
+        decided_at = timezone('utc'::text, now()),
+        decided_by = v_actor_id,
+        linked_member_id = v_final_member_id,
+        reviewed_fields_snapshot = jsonb_build_object(
+            'full_name', trim(p_final_full_name),
+            'date_of_birth', p_final_date_of_birth,
+            'phone', v_clean_phone,
+            'village_name', trim(p_final_village_name),
+            'gender', p_final_gender,
+            'was_created_new', p_create_new
+        )
+    WHERE id = p_request_id;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        new_state,
+        reason
+    ) VALUES (
+        v_target_church_id,
+        v_actor_id,
+        'access_request.approved',
+        'access_request',
+        p_request_id::text,
+        'Accountant approved access request and linked to member ' || v_final_member_id::text,
+        jsonb_build_object(
+            'member_id', v_final_member_id,
+            'user_id', v_req.user_id,
+            'create_new', p_create_new,
+            'village_name', trim(p_final_village_name)
+        ),
+        'Accountant review and member mapping complete'
+    );
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'member_id', v_final_member_id,
+        'church_id', v_target_church_id
+    );
+END;
+$$;
+
+-- 8. RETURN ACCESS REQUEST FOR CORRECTION
+CREATE OR REPLACE FUNCTION public.return_access_request_for_correction(
+    p_request_id UUID,
+    p_reason TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_req RECORD;
+    v_has_accountant_role BOOLEAN;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
+        RAISE EXCEPTION 'A clear reason is required to return an application for correction.';
+    END IF;
+
+    SELECT * INTO v_req FROM public.access_requests WHERE id = p_request_id;
+    IF v_req.id IS NULL THEN
+        RAISE EXCEPTION 'Access request not found.';
+    END IF;
+
+    IF v_req.status <> 'pending' THEN
+        RAISE EXCEPTION 'Only pending requests can be returned for correction.';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.church_access
+        WHERE church_id = v_req.church_id AND user_id = v_actor_id AND role = 'accountant' AND status = 'approved'
+    ) INTO v_has_accountant_role;
+
+    IF NOT v_has_accountant_role AND NOT public.is_platform_admin(v_actor_id) THEN
+        RAISE EXCEPTION 'Unauthorized: Only church Accountants can return requests for correction.';
+    END IF;
+
+    UPDATE public.access_requests
+    SET
+        status = 'returned_for_correction',
+        decided_at = timezone('utc'::text, now()),
+        decided_by = v_actor_id,
+        decision_reason = trim(p_reason)
+    WHERE id = p_request_id;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        reason
+    ) VALUES (
+        v_req.church_id,
+        v_actor_id,
+        'access_request.returned_for_correction',
+        'access_request',
+        p_request_id::text,
+        'Returned application for applicant correction: ' || trim(p_reason),
+        trim(p_reason)
+    );
+
+    RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+-- 9. MEMBER SELF-SERVICE PROFILE UPDATE (Indian mobile validation + read-only auth email)
+CREATE OR REPLACE FUNCTION public.update_my_member_profile(
+    p_church_id UUID,
+    p_full_name TEXT,
+    p_contact_phone TEXT,
+    p_gender TEXT,
+    p_contact_email TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_clean_name TEXT;
+    v_clean_phone TEXT;
+    v_clean_gender TEXT;
+    v_member_id UUID;
+    v_old_member RECORD;
+    v_new_member RECORD;
+    v_new_profile RECORD;
+    v_is_suspended BOOLEAN;
+    v_has_access BOOLEAN;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_church_id IS NULL THEN
+        RAISE EXCEPTION 'Church context is required.';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1 FROM public.church_access
+        WHERE church_id = p_church_id
+          AND user_id = v_actor_id
+          AND status = 'suspended'
+    ) INTO v_is_suspended;
+
+    IF v_is_suspended THEN
+        RAISE EXCEPTION 'Your access to this church has been suspended.';
+    END IF;
+
+    SELECT (
+        public.is_platform_admin(v_actor_id)
+        OR EXISTS (
+            SELECT 1 FROM public.church_access
+            WHERE church_id = p_church_id
+              AND user_id = v_actor_id
+              AND status = 'approved'
+        )
+    ) INTO v_has_access;
+
+    IF NOT v_has_access THEN
+        RAISE EXCEPTION 'Unauthorized: No approved church access for this church.';
+    END IF;
+
+    v_clean_name := trim(COALESCE(p_full_name, ''));
+    IF length(v_clean_name) = 0 THEN
+        RAISE EXCEPTION 'Full name is required.';
+    END IF;
+
+    v_clean_phone := regexp_replace(trim(COALESCE(p_contact_phone, '')), '[\s\-()]', '', 'g');
+    IF v_clean_phone ~ '^\+91[0-9]{10}$' THEN
+        v_clean_phone := substr(v_clean_phone, 4);
+    ELSIF v_clean_phone ~ '^91[0-9]{10}$' THEN
+        v_clean_phone := substr(v_clean_phone, 3);
+    ELSIF v_clean_phone ~ '^0[0-9]{10}$' THEN
+        v_clean_phone := substr(v_clean_phone, 2);
+    END IF;
+
+    IF length(v_clean_phone) = 0 THEN
+        RAISE EXCEPTION 'Mobile number is required.';
+    END IF;
+    IF v_clean_phone !~ '^[6-9][0-9]{9}$' OR v_clean_phone ~ '^([0-9])\1{9}$' THEN
+        RAISE EXCEPTION 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).';
+    END IF;
+
+    v_clean_gender := lower(trim(COALESCE(p_gender, '')));
+    IF v_clean_gender NOT IN ('male', 'female', 'other', 'prefer_not_to_say') THEN
+        RAISE EXCEPTION 'Gender selection is required (male, female, other, prefer_not_to_say).';
+    END IF;
+
+    UPDATE public.profiles
+    SET
+        full_name = v_clean_name,
+        phone = v_clean_phone,
+        updated_at = timezone('utc'::text, now())
+    WHERE id = v_actor_id
+    RETURNING * INTO v_new_profile;
+
+    SELECT member_id INTO v_member_id
+    FROM public.member_account_links
+    WHERE church_id = p_church_id AND user_id = v_actor_id
+    LIMIT 1;
+
+    IF v_member_id IS NOT NULL THEN
+        SELECT * INTO v_old_member
+        FROM public.members
+        WHERE id = v_member_id AND church_id = p_church_id
+        FOR UPDATE;
+
+        IF v_old_member.id IS NOT NULL THEN
+            UPDATE public.members
+            SET
+                full_name = v_clean_name,
+                contact_phone = v_clean_phone,
+                gender = v_clean_gender,
+                updated_at = timezone('utc'::text, now()),
+                updated_by = v_actor_id
+            WHERE id = v_member_id
+            RETURNING * INTO v_new_member;
+
+            INSERT INTO public.audit_logs (
+                church_id,
+                actor_user_id,
+                action,
+                entity_type,
+                entity_id,
+                change_summary,
+                previous_state,
+                new_state,
+                reason
+            ) VALUES (
+                p_church_id,
+                v_actor_id,
+                'member.self_profile_updated',
+                'member',
+                v_member_id::text,
+                'Member updated their own profile details (name, mobile, gender)',
+                jsonb_build_object(
+                    'full_name', v_old_member.full_name,
+                    'contact_phone', v_old_member.contact_phone,
+                    'gender', v_old_member.gender
+                ),
+                jsonb_build_object(
+                    'full_name', v_new_member.full_name,
+                    'contact_phone', v_new_member.contact_phone,
+                    'gender', v_new_member.gender
+                ),
+                'Member profile self-update'
+            );
+        END IF;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'profile', CASE WHEN v_new_profile.id IS NOT NULL THEN to_jsonb(v_new_profile) ELSE NULL END,
+        'member', CASE WHEN v_new_member.id IS NOT NULL THEN to_jsonb(v_new_member) ELSE NULL END
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.update_my_member_profile(UUID, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.update_my_member_profile(UUID, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+-- 10. STAFF ACCESS MANAGEMENT RPCS (Accountants -> Collector from active linked members; Admins -> all staff roles)
+CREATE OR REPLACE FUNCTION public.get_church_staff_management_data(
+    p_church_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_is_platform_admin BOOLEAN;
+    v_actor_role TEXT;
+    v_assignments JSONB;
+    v_eligible_members JSONB;
+    v_profiles JSONB := '[]'::jsonb;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_church_id IS NULL THEN
+        RAISE EXCEPTION 'Church context is required.';
+    END IF;
+
+    v_is_platform_admin := public.is_platform_admin(v_actor_id);
+    v_actor_role := public.get_auth_church_role(p_church_id, v_actor_id);
+
+    IF NOT v_is_platform_admin AND v_actor_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Only Church Admins and Accountants can view staff access management.';
+    END IF;
+
+    SELECT COALESCE(jsonb_agg(row_data ORDER BY role_rank, staff_name), '[]'::jsonb)
+    INTO v_assignments
+    FROM (
+        SELECT
+            jsonb_build_object(
+                'id', ca.id,
+                'church_id', ca.church_id,
+                'user_id', ca.user_id,
+                'role', ca.role,
+                'status', ca.status,
+                'granted_at', ca.granted_at,
+                'granted_by', ca.granted_by,
+                'notes', ca.notes,
+                'profile', CASE
+                    WHEN p.id IS NOT NULL THEN jsonb_build_object(
+                        'id', p.id,
+                        'email', p.email,
+                        'full_name', p.full_name,
+                        'phone', p.phone
+                    )
+                    ELSE NULL
+                END,
+                'member', CASE
+                    WHEN m.id IS NOT NULL THEN jsonb_build_object(
+                        'id', m.id,
+                        'member_number', m.member_number,
+                        'full_name', m.full_name,
+                        'village_name', m.village_name,
+                        'contact_phone', m.contact_phone,
+                        'membership_status', m.membership_status
+                    )
+                    ELSE NULL
+                END
+            ) AS row_data,
+            CASE ca.role
+                WHEN 'admin' THEN 1
+                WHEN 'accountant' THEN 2
+                WHEN 'collector' THEN 3
+                ELSE 4
+            END AS role_rank,
+            COALESCE(p.full_name, m.full_name, '') AS staff_name
+        FROM public.church_access ca
+        LEFT JOIN public.profiles p ON p.id = ca.user_id
+        LEFT JOIN public.member_account_links mal
+            ON mal.church_id = ca.church_id AND mal.user_id = ca.user_id
+        LEFT JOIN public.members m
+            ON m.id = mal.member_id AND m.church_id = ca.church_id
+        WHERE ca.church_id = p_church_id
+          AND ca.role IN ('admin', 'accountant', 'collector')
+    ) sub;
+
+    SELECT COALESCE(jsonb_agg(member_row ORDER BY member_name), '[]'::jsonb)
+    INTO v_eligible_members
+    FROM (
+        SELECT
+            jsonb_build_object(
+                'member_id', m.id,
+                'member_number', m.member_number,
+                'full_name', m.full_name,
+                'village_name', m.village_name,
+                'contact_phone', m.contact_phone,
+                'membership_status', m.membership_status,
+                'user_id', mal.user_id,
+                'auth_email', COALESCE(p.email, ''),
+                'collector_status', ca_col.status
+            ) AS member_row,
+            m.full_name AS member_name
+        FROM public.member_account_links mal
+        JOIN public.members m
+            ON m.id = mal.member_id AND m.church_id = p_church_id
+        JOIN public.profiles p
+            ON p.id = mal.user_id
+        LEFT JOIN public.church_access ca_col
+            ON ca_col.church_id = p_church_id
+           AND ca_col.user_id = mal.user_id
+           AND ca_col.role = 'collector'
+        WHERE mal.church_id = p_church_id
+          AND m.membership_status = 'active'
+    ) mem_sub;
+
+    IF v_is_platform_admin OR v_actor_role = 'admin' THEN
+        SELECT COALESCE(jsonb_agg(
+            jsonb_build_object(
+                'id', p.id,
+                'email', p.email,
+                'full_name', p.full_name,
+                'phone', p.phone,
+                'created_at', p.created_at,
+                'updated_at', p.updated_at
+            ) ORDER BY p.full_name
+        ), '[]'::jsonb)
+        INTO v_profiles
+        FROM public.profiles p;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'assignments', v_assignments,
+        'eligible_members', v_eligible_members,
+        'profiles', v_profiles
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_church_staff_management_data(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_church_staff_management_data(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.assign_church_staff_role(
+    p_church_id UUID,
+    p_user_id UUID,
+    p_role TEXT,
+    p_notes TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_is_platform_admin BOOLEAN;
+    v_actor_role TEXT;
+    v_target_role TEXT := lower(trim(COALESCE(p_role, '')));
+    v_is_active_church_member BOOLEAN;
+    v_target_profile RECORD;
+    v_member_record RECORD;
+    v_assignment RECORD;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_church_id IS NULL OR p_user_id IS NULL THEN
+        RAISE EXCEPTION 'Church and user selection are required.';
+    END IF;
+
+    IF v_target_role NOT IN ('collector', 'accountant', 'admin') THEN
+        RAISE EXCEPTION 'Invalid staff role. Must be collector, accountant, or admin.';
+    END IF;
+
+    v_is_platform_admin := public.is_platform_admin(v_actor_id);
+    v_actor_role := public.get_auth_church_role(p_church_id, v_actor_id);
+
+    IF v_is_platform_admin OR v_actor_role = 'admin' THEN
+        NULL;
+    ELSIF v_actor_role = 'accountant' THEN
+        IF v_target_role <> 'collector' THEN
+            RAISE EXCEPTION 'Unauthorized: Church Accountants can only assign the Collector role.';
+        END IF;
+
+        SELECT EXISTS (
+            SELECT 1
+            FROM public.member_account_links mal
+            JOIN public.members m
+              ON m.id = mal.member_id AND m.church_id = p_church_id
+            WHERE mal.church_id = p_church_id
+              AND mal.user_id = p_user_id
+              AND m.membership_status = 'active'
+        ) INTO v_is_active_church_member;
+
+        IF NOT v_is_active_church_member THEN
+            RAISE EXCEPTION 'Collectors assigned by an Accountant must be active linked members of this church.';
+        END IF;
+    ELSE
+        RAISE EXCEPTION 'Unauthorized: Only Church Admins and Accountants can assign staff roles.';
+    END IF;
+
+    SELECT * INTO v_target_profile FROM public.profiles WHERE id = p_user_id;
+    IF v_target_profile.id IS NULL THEN
+        RAISE EXCEPTION 'Selected user account does not exist.';
+    END IF;
+
+    SELECT m.* INTO v_member_record
+    FROM public.member_account_links mal
+    JOIN public.members m ON m.id = mal.member_id AND m.church_id = p_church_id
+    WHERE mal.church_id = p_church_id AND mal.user_id = p_user_id
+    LIMIT 1;
+
+    INSERT INTO public.church_access (
+        church_id,
+        user_id,
+        role,
+        status,
+        granted_at,
+        granted_by,
+        notes
+    ) VALUES (
+        p_church_id,
+        p_user_id,
+        v_target_role,
+        'approved',
+        timezone('utc'::text, now()),
+        v_actor_id,
+        NULLIF(trim(COALESCE(p_notes, '')), '')
+    )
+    ON CONFLICT (church_id, user_id, role) DO UPDATE
+    SET
+        status = 'approved',
+        granted_at = timezone('utc'::text, now()),
+        granted_by = v_actor_id,
+        notes = COALESCE(NULLIF(trim(COALESCE(EXCLUDED.notes, '')), ''), public.church_access.notes)
+    RETURNING * INTO v_assignment;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        new_state,
+        reason
+    ) VALUES (
+        p_church_id,
+        v_actor_id,
+        'staff.role_assigned',
+        'church_access',
+        v_assignment.id::text,
+        'Assigned ' || v_target_role || ' role to ' || COALESCE(v_member_record.full_name, v_target_profile.full_name, v_target_profile.email),
+        jsonb_build_object(
+            'user_id', p_user_id,
+            'role', v_target_role,
+            'status', 'approved',
+            'member_id', v_member_record.id,
+            'member_number', v_member_record.member_number,
+            'notes', v_assignment.notes
+        ),
+        COALESCE(v_assignment.notes, 'Staff role assigned')
+    );
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'assignment_id', v_assignment.id,
+        'role', v_assignment.role,
+        'status', v_assignment.status
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.assign_church_staff_role(UUID, UUID, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.assign_church_staff_role(UUID, UUID, TEXT, TEXT) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.toggle_church_staff_status(
+    p_church_id UUID,
+    p_assignment_id UUID,
+    p_new_status TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_is_platform_admin BOOLEAN;
+    v_actor_role TEXT;
+    v_clean_status TEXT := lower(trim(COALESCE(p_new_status, '')));
+    v_target RECORD;
+    v_updated RECORD;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF v_clean_status NOT IN ('approved', 'suspended') THEN
+        RAISE EXCEPTION 'Invalid status. Must be approved or suspended.';
+    END IF;
+
+    SELECT * INTO v_target
+    FROM public.church_access
+    WHERE id = p_assignment_id AND church_id = p_church_id
+    FOR UPDATE;
+
+    IF v_target.id IS NULL THEN
+        RAISE EXCEPTION 'Staff assignment not found in this church.';
+    END IF;
+
+    IF v_target.role NOT IN ('collector', 'accountant', 'admin') THEN
+        RAISE EXCEPTION 'Only staff role assignments (collector, accountant, admin) can be managed here.';
+    END IF;
+
+    v_is_platform_admin := public.is_platform_admin(v_actor_id);
+    v_actor_role := public.get_auth_church_role(p_church_id, v_actor_id);
+
+    IF v_is_platform_admin OR v_actor_role = 'admin' THEN
+        NULL;
+    ELSIF v_actor_role = 'accountant' THEN
+        IF v_target.role <> 'collector' THEN
+            RAISE EXCEPTION 'Unauthorized: Church Accountants can only suspend or restore Collector access.';
+        END IF;
+    ELSE
+        RAISE EXCEPTION 'Unauthorized: Only Church Admins and Accountants can modify staff access.';
+    END IF;
+
+    UPDATE public.church_access
+    SET status = v_clean_status
+    WHERE id = v_target.id
+    RETURNING * INTO v_updated;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state,
+        reason
+    ) VALUES (
+        p_church_id,
+        v_actor_id,
+        'staff.status_changed',
+        'church_access',
+        v_target.id::text,
+        'Changed ' || v_target.role || ' access status from ' || v_target.status || ' to ' || v_clean_status,
+        jsonb_build_object('role', v_target.role, 'status', v_target.status, 'user_id', v_target.user_id),
+        jsonb_build_object('role', v_updated.role, 'status', v_updated.status, 'user_id', v_updated.user_id),
+        'Staff access status updated'
+    );
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'assignment_id', v_updated.id,
+        'status', v_updated.status
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.toggle_church_staff_status(UUID, UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.toggle_church_staff_status(UUID, UUID, TEXT) TO authenticated;
