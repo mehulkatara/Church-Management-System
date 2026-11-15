@@ -234,8 +234,8 @@ export type PermittedAction =
   | 'create_member'
   | 'edit_member_basic' // Collector can edit name, contact phone
   | 'change_member_status' // ONLY Accountant
-  | 'edit_village_name' // Admin and Accountant
-  | 'edit_gender' // Admin, Accountant, or Member (own profile)
+  | 'edit_village_name' // Admin, Accountant, and Collector
+  | 'edit_gender' // Admin, Accountant, Collector, or Member (own profile)
   | 'create_donation' // Admin, Accountant, Collector
   | 'edit_donation' // Admin or Accountant only
   | 'cancel_donation' // Admin or Accountant only
@@ -281,14 +281,14 @@ export function checkRolePermission(
         : { allowed: false, reason: 'Strictly restricted to church Accountants.' };
 
     case 'edit_village_name':
-      return role === 'platform_admin' || role === 'admin' || role === 'accountant'
+      return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'collector'
         ? { allowed: true }
-        : { allowed: false, reason: 'Collectors and Members cannot modify Village Name.' };
+        : { allowed: false, reason: 'Members cannot modify Village Name.' };
 
     case 'edit_gender':
-      return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'member'
+      return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'collector' || role === 'member'
         ? { allowed: true }
-        : { allowed: false, reason: 'Collectors cannot update member Gender.' };
+        : { allowed: false, reason: 'Insufficient privileges to update member Gender.' };
 
     case 'create_donation':
       return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'collector'

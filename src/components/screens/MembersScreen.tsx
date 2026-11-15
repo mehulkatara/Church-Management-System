@@ -65,8 +65,10 @@ export const MembersScreen: React.FC = () => {
   );
 
   const canCreateMember = isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant';
-  const canEditVillage = isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant';
-  const canEditGender = isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant';
+  const canEditVillage =
+    isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant' || activeRole === 'collector';
+  const canEditGender =
+    isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant' || activeRole === 'collector';
 
   const fetchMembers = async () => {
     if (!supabase || !activeChurch) return;
@@ -758,10 +760,10 @@ export const MembersScreen: React.FC = () => {
               )}
             </div>
 
-            {/* Village / City Name: Admin and Accountant only; Collectors disabled */}
+            {/* Village / City Name: Admin, Accountant, and Collector */}
             <div>
               <label htmlFor="edit-member-village" className="block text-slate-300 font-medium mb-1">
-                Village / City Name {!canEditVillage && '(Read-only for Collectors)'}
+                Village / City Name {!canEditVillage && '(Read-only)'}
               </label>
               <VillageCityInput
                 id="edit-member-village"
@@ -796,7 +798,7 @@ export const MembersScreen: React.FC = () => {
 
               <div>
                 <label className="block text-slate-300 font-medium mb-1">
-                  Gender {!canEditGender && '(Read-only for Collectors)'}
+                  Gender {!canEditGender && '(Read-only)'}
                 </label>
                 <select
                   value={gender}

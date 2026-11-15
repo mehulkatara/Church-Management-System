@@ -120,12 +120,11 @@ test('Accountant-only member status change rule enforcement', () => {
 test('Role permission checks align with specifications', () => {
   // Collector cannot create members
   assert.equal(checkRolePermission('collector', 'create_member').allowed, false);
-  // Collector can edit member basic info (name, phone, email)
+  // Collector can edit member basic info, village, and gender, but cannot change status
   assert.equal(checkRolePermission('collector', 'edit_member_basic').allowed, true);
-  // Collector cannot change status, village, or gender
   assert.equal(checkRolePermission('collector', 'change_member_status').allowed, false);
-  assert.equal(checkRolePermission('collector', 'edit_village_name').allowed, false);
-  assert.equal(checkRolePermission('collector', 'edit_gender').allowed, false);
+  assert.equal(checkRolePermission('collector', 'edit_village_name').allowed, true);
+  assert.equal(checkRolePermission('collector', 'edit_gender').allowed, true);
   // Collector cannot edit or cancel saved donations
   assert.equal(checkRolePermission('collector', 'edit_donation').allowed, false);
   assert.equal(checkRolePermission('collector', 'cancel_donation').allowed, false);
