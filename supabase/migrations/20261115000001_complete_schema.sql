@@ -1,14 +1,118 @@
 -- ==============================================================================
--- CHURCH MANAGEMENT SYSTEM - CONSOLIDATED DATABASE SCHEMA & SECURITY MIGRATION
+-- CHURCH MANAGEMENT SYSTEM - FULL RESET & CONSOLIDATED SCHEMA MIGRATION
 -- Migration: 20261115000001_complete_schema.sql
--- Single consolidated baseline recreating:
---   1. All 18 tables, constraints, and indexes
---   2. Auth user -> public.profiles sync trigger
---   3. Row Level Security (RLS) enabled on ALL 18 tables + complete policies
---   4. Deterministic role helper functions
---   5. All SECURITY DEFINER atomic RPCs (donations, onboarding, Indian mobile
---      validation, read-only auth email, member self-update, and staff access)
+-- WARNING: DESTRUCTIVE RESET!
+-- Running this script deletes ALL existing tables, views, functions, triggers,
+-- policies, and data in the `public` schema, then recreates everything cleanly:
+--   0. Drops existing trigger on auth.users and all non-extension public objects
+--   1. Creates all 18 tables, constraints, and indexes
+--   2. Creates auth.users -> public.profiles sync trigger
+--   3. Enables Row Level Security (RLS) on ALL 18 tables + complete policies
+--   4. Installs deterministic role helper functions
+--   5. Installs all SECURITY DEFINER atomic RPCs
+--   6. Backfills public.profiles from any existing auth.users rows
 -- ==============================================================================
+
+-- ==============================================================================
+-- SECTION 0: FULL RESET (DELETE EVERYTHING EXISTING IN PUBLIC SCHEMA)
+-- ==============================================================================
+
+-- Remove auth sync trigger first
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+
+-- Optional: Uncomment the line below ONLY if you also want to wipe all login
+-- accounts from Supabase Auth (otherwise existing Google logins stay intact):
+-- DELETE FROM auth.users;
+
+-- Drop all existing views, tables, functions, procedures, and custom types in public
+-- while preserving PostgreSQL extension objects (e.g. uuid-ossp).
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN (
+        SELECT c.relname, c.relkind
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('v', 'm')
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.objid = c.oid AND d.deptype = 'e'
+          )
+    ) LOOP
+        IF r.relkind = 'm' THEN
+            EXECUTE format('DROP MATERIALIZED VIEW IF EXISTS public.%I CASCADE', r.relname);
+        ELSE
+            EXECUTE format('DROP VIEW IF EXISTS public.%I CASCADE', r.relname);
+        END IF;
+    END LOOP;
+
+    FOR r IN (
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p')
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.objid = c.oid AND d.deptype = 'e'
+          )
+    ) LOOP
+        EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', r.relname);
+    END LOOP;
+
+    FOR r IN (
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind = 'S'
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.objid = c.oid AND d.deptype = 'e'
+          )
+    ) LOOP
+        EXECUTE format('DROP SEQUENCE IF EXISTS public.%I CASCADE', r.relname);
+    END LOOP;
+
+    FOR r IN (
+        SELECT
+            n.nspname,
+            p.proname,
+            pg_get_function_identity_arguments(p.oid) AS identity_args,
+            p.prokind
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.objid = p.oid AND d.deptype = 'e'
+          )
+    ) LOOP
+        IF r.prokind = 'p' THEN
+            EXECUTE format('DROP PROCEDURE IF EXISTS %I.%I(%s) CASCADE', r.nspname, r.proname, r.identity_args);
+        ELSIF r.prokind = 'a' THEN
+            EXECUTE format('DROP AGGREGATE IF EXISTS %I.%I(%s) CASCADE', r.nspname, r.proname, r.identity_args);
+        ELSE
+            EXECUTE format('DROP FUNCTION IF EXISTS %I.%I(%s) CASCADE', r.nspname, r.proname, r.identity_args);
+        END IF;
+    END LOOP;
+
+    FOR r IN (
+        SELECT t.typname
+        FROM pg_type t
+        JOIN pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname = 'public'
+          AND t.typtype IN ('e', 'd')
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.objid = t.oid AND d.deptype = 'e'
+          )
+    ) LOOP
+        EXECUTE format('DROP TYPE IF EXISTS public.%I CASCADE', r.typname);
+    END LOOP;
+END $$;
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -2357,3 +2461,21 @@ $$;
 
 REVOKE ALL ON FUNCTION public.toggle_church_staff_status(UUID, UUID, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.toggle_church_staff_status(UUID, UUID, TEXT) TO authenticated;
+
+-- ==============================================================================
+-- SECTION 7: BACKFILL PROFILES FOR EXISTING AUTH USERS (IF ANY REMAIN)
+-- ==============================================================================
+
+INSERT INTO public.profiles (id, email, full_name, phone)
+SELECT
+    u.id,
+    COALESCE(u.email, ''),
+    COALESCE(
+        NULLIF(trim(u.raw_user_meta_data ->> 'full_name'), ''),
+        NULLIF(trim(u.raw_user_meta_data ->> 'name'), ''),
+        NULLIF(split_part(COALESCE(u.email, ''), '@', 1), ''),
+        'User'
+    ),
+    NULLIF(trim(COALESCE(u.raw_user_meta_data ->> 'phone', '')), '')
+FROM auth.users u
+ON CONFLICT (id) DO NOTHING;
