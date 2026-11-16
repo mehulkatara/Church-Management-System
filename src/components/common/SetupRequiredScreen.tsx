@@ -255,7 +255,8 @@ VITE_SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
                     Open your Supabase Project Dashboard &rarr; <strong>SQL Editor</strong> &rarr; New Query.
                     Copy and run the contents from the <strong>Database Migrations (SQL)</strong> tab:
                     <ul className="list-disc list-inside mt-1 text-slate-400 text-xs space-y-1">
-                      <li><code>supabase/migrations/20261115000001_complete_schema.sql</code> (All 18 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
+                      <li>Fresh setup / reset: <code>supabase/complete_schema.sql</code> (All 19 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
+                      <li>Incremental deployments: run new files from <code>supabase/migrations/</code> (e.g., <code>20261116000001_member_share_links.sql</code>)</li>
                     </ul>
                   </div>
                 </li>
@@ -332,22 +333,28 @@ WHERE email = 'admin@yourchurch.org';`}
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-white">
-                    Consolidated Database Migration
+                    Canonical Schema &amp; Incremental Deployment Migrations
                   </h3>
                   <p className="text-xs text-slate-400">
-                    File: <code>supabase/migrations/20261115000001_complete_schema.sql</code> (19 tables, RLS policies, triggers &amp; atomic RPCs)
+                    Full latest schema: <code>supabase/complete_schema.sql</code> (19 tables, RLS policies, triggers &amp; RPCs) &middot; Per-change deployable files: <code>supabase/migrations/*.sql</code>
                   </p>
                 </div>
                 <button
-                  onClick={() => copyToClipboard('See file: supabase/migrations/20261115000001_complete_schema.sql', 'mig1')}
+                  onClick={() => copyToClipboard('supabase/complete_schema.sql', 'mig1')}
                   className="text-xs bg-sky-600 hover:bg-sky-500 text-white font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors"
                 >
                   <Copy className="w-3.5 h-3.5" />
-                  {copiedSection === 'mig1' ? 'Copied Path!' : 'Copy File Path'}
+                  {copiedSection === 'mig1' ? 'Copied Path!' : 'Copy Schema Path'}
                 </button>
               </div>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- Key tables created (all with RLS enabled):</p>
+                <p className="text-sky-400">-- Incremental migrations in supabase/migrations/ (apply sequentially for live deployments):</p>
+                <p>1. 20261115000001_complete_schema.sql &mdash; Initial baseline (18 tables, RLS policies &amp; core RPCs)</p>
+                <p>2. 20261116000001_member_share_links.sql &mdash; Single-use member portal share links, RLS &amp; 3 RPCs</p>
+              </div>
+
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
+                <p className="text-sky-400">-- All 19 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
                 <p>member_share_links, access_requests, donation_categories, receiving_accounts, donations,</p>
                 <p>receipt_number_registry, donation_revisions, audit_logs, church_settings, notifications,</p>
