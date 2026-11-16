@@ -6,6 +6,7 @@ import {
   getFinancialYear,
   formatINR,
   calculateRankings,
+  buildAutoReceiptPrefix,
 } from '../../lib/domain-logic';
 import {
   Building2,
@@ -217,16 +218,16 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
             </button>
           </div>
 
-          {/* Receipt Prefix */}
+          {/* Automatic Receipt Format */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
             <span className="text-[11px] text-slate-400 uppercase font-mono tracking-wider block">
-              Receipt Book Prefix
+              Receipt Format ({currentFY.fyCode})
             </span>
-            <div className="text-lg font-bold font-mono text-sky-400 truncate">
-              {activeChurch?.receipt_prefix || 'REC/2026-27/'}
+            <div className="text-lg font-bold font-mono text-sky-400 truncate tabular-nums">
+              {buildAutoReceiptPrefix(activeChurch?.code, new Date())}#
             </div>
             <span className="text-[11px] text-slate-500 font-mono block">
-              Manual entry required
+              Auto prefix &middot; Numeric entry
             </span>
           </div>
         </div>

@@ -36,7 +36,6 @@ const SAMPLE_CHURCH: Church = {
   address: '14 Anna Salai, Chennai',
   phone: '+91 44 2811 0000',
   email: 'admin@bethel.org',
-  receipt_prefix: 'BCA',
   is_active: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',

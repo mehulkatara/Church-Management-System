@@ -4,11 +4,12 @@ import { supabase } from '../../lib/supabase';
 import type { Member, DonationCategory, ReceivingAccount, PaymentMethod } from '../../types/database';
 import {
   getFinancialYear,
-  suggestReceiptPrefix,
+  buildFullReceiptNumber,
+  sanitizeReceiptDigitsInput,
   formatSmsMessage,
   formatINR,
-  validateReceiptNumber,
 } from '../../lib/domain-logic';
+import { checkReceiptAvailability } from '../../lib/receipt-availability';
 import {
   Receipt,
   User,
@@ -39,10 +40,11 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   });
   const currentFY = getFinancialYear(donationDate || new Date());
-  const suggestedPrefix = suggestReceiptPrefix(currentFY.fyCode, activeChurch?.code);
+  const [receiptDigits, setReceiptDigits] = useState('');
+  const receiptBuild = buildFullReceiptNumber(activeChurch?.code, donationDate || new Date(), receiptDigits);
+  const lockedPrefix = receiptBuild.prefix;
+  const fullReceiptPreview = receiptBuild.valid ? receiptBuild.fullReceiptNumber : '';
 
-  const [receiptNumber, setReceiptNumber] = useState(suggestedPrefix);
-  const prevSuggestedPrefixRef = useRef(suggestedPrefix);
   const [selectedMemberId, setSelectedMemberId] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [amount, setAmount] = useState('500');
@@ -57,6 +59,12 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const [accounts, setAccounts] = useState<ReceivingAccount[]>([]);
   const [memberSearch, setMemberSearch] = useState('');
   const [isLoadingLookups, setIsLoadingLookups] = useState(true);
+
+  // Live duplicate receipt availability state
+  const [availabilityState, setAvailabilityState] = useState<
+    'idle' | 'checking' | 'available' | 'duplicate'
+  >('idle');
+  const checkCounterRef = useRef(0);
 
   // Submission State
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -74,17 +82,32 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
   useEffect(() => {
-    const prevPrefix = prevSuggestedPrefixRef.current;
-    if (prevPrefix !== suggestedPrefix) {
-      setReceiptNumber((curr) => {
-        if (!curr.trim() || curr === prevPrefix) {
-          return suggestedPrefix;
-        }
-        return curr;
-      });
-      prevSuggestedPrefixRef.current = suggestedPrefix;
+    if (!activeChurch || !receiptBuild.valid || !donationDate) {
+      setAvailabilityState('idle');
+      return;
     }
-  }, [suggestedPrefix]);
+
+    const requestId = ++checkCounterRef.current;
+    setAvailabilityState('checking');
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await checkReceiptAvailability({
+          churchId: activeChurch.id,
+          churchCode: activeChurch.code,
+          donationDate,
+          receiptDigits: receiptBuild.numericValue,
+        });
+        if (requestId !== checkCounterRef.current) return;
+        setAvailabilityState(res.available ? 'available' : 'duplicate');
+      } catch {
+        if (requestId !== checkCounterRef.current) return;
+        setAvailabilityState('idle');
+      }
+    }, 220);
+
+    return () => clearTimeout(timer);
+  }, [activeChurch?.id, activeChurch?.code, donationDate, receiptBuild.valid, receiptBuild.numericValue]);
 
   // Fetch church master data
   useEffect(() => {
@@ -160,14 +183,17 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
     setErrorMessage(null);
 
-    // Validate receipt number
-    const receiptValidation = validateReceiptNumber(receiptNumber);
-    if (!receiptValidation.valid) {
-      setErrorMessage(receiptValidation.error || 'Please enter a valid receipt number.');
+    // Validate receipt digits + automatic prefix
+    const built = buildFullReceiptNumber(activeChurch.code, donationDate, receiptDigits);
+    if (!built.valid) {
+      setErrorMessage(built.error || 'Please enter a valid positive receipt number.');
       return;
     }
-    if (receiptNumber.trim() === suggestedPrefix.trim()) {
-      setErrorMessage(`Please enter the receipt number after the prefix (e.g. ${suggestedPrefix}001).`);
+
+    if (availabilityState === 'duplicate') {
+      setErrorMessage(
+        `Receipt number ${built.fullReceiptNumber} already exists for this church. Please enter an unused receipt number.`
+      );
       return;
     }
 
@@ -195,14 +221,31 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     setIsSubmitting(true);
 
     try {
+      // Live duplicate check right before RPC write
+      const checkRes = await checkReceiptAvailability({
+        churchId: activeChurch.id,
+        churchCode: activeChurch.code,
+        donationDate,
+        receiptDigits: built.numericValue,
+      });
+
+      if (!checkRes.available) {
+        setAvailabilityState('duplicate');
+        setErrorMessage(
+          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
+        );
+        setIsSubmitting(false);
+        return;
+      }
+
       // Generate client idempotency key to prevent double clicks
-      const idempotencyKey = `rec-${activeChurch.id}-${receiptValidation.normalized}-${Date.now()}`;
+      const idempotencyKey = `rec-${activeChurch.id}-${built.normalizedKey}-${Date.now()}`;
 
       // Call atomic record_donation RPC
       const { data, error } = await supabase.rpc('record_donation', {
         p_church_id: activeChurch.id,
         p_member_id: selectedMemberId,
-        p_receipt_number: receiptNumber.trim(),
+        p_receipt_number: built.numericValue,
         p_donation_date: donationDate,
         p_category_id: categoryId,
         p_amount: parsedAmount,
@@ -214,13 +257,13 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       });
 
       if (error) {
-        // Intercept unique receipt error
         if (
           error.message.includes('already exists') ||
           error.message.includes('uq_church_normalized_receipt')
         ) {
+          setAvailabilityState('duplicate');
           setErrorMessage(
-            'This receipt number already exists for this church. Please check the number and try again.'
+            `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
           );
         } else {
           setErrorMessage(error.message);
@@ -235,7 +278,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
       const savedInfo = {
         id: data?.id || 'new-donation',
-        receiptNumber: receiptNumber.trim(),
+        receiptNumber: data?.receipt_number || built.fullReceiptNumber,
         amount: parsedAmount,
         memberName: memberObj?.full_name || 'Member',
         memberPhone: memberObj?.contact_phone || null,
@@ -250,8 +293,9 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to save donation.';
       if (msg.includes('already exists')) {
+        setAvailabilityState('duplicate');
         setErrorMessage(
-          'This receipt number already exists for this church. Please check the number and try again.'
+          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
         );
       } else {
         setErrorMessage(msg);
@@ -263,8 +307,8 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
   const handleResetForNext = () => {
     setSavedDonation(null);
-    setReceiptNumber(suggestedPrefix);
-    prevSuggestedPrefixRef.current = suggestedPrefix;
+    setReceiptDigits('');
+    setAvailabilityState('idle');
     setAmount('500');
     setPaymentReference('');
     setNotes('');
@@ -440,27 +484,63 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
           </div>
         )}
 
-        {/* 1. RECEIPT NUMBER (Prominently near top per Section 8) */}
-        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
-          <label htmlFor="receipt-number" className="block text-xs font-semibold text-white">
-            Manual Receipt Number <span className="text-red-400">*</span>
-          </label>
+        {/* 1. RECEIPT NUMBER (Locked Auto Prefix + Numeric Input Only + Live Duplicate Check) */}
+        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <label htmlFor="receipt-number" className="block text-xs font-semibold text-white">
+              Receipt Number <span className="text-red-400">*</span>
+            </label>
+            <span className="text-[11px] font-mono text-slate-400 tabular-nums">
+              Prefix locked to {lockedPrefix}
+            </span>
+          </div>
 
-          <div className="relative">
-            <Receipt className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
+          <div
+            className={`flex items-stretch rounded-xl border bg-slate-900 overflow-hidden focus-within:border-sky-500 ${
+              availabilityState === 'duplicate' ? 'border-red-500' : 'border-slate-700'
+            }`}
+          >
+            <div className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-950 border-r border-slate-700 text-slate-300 font-mono text-sm tabular-nums select-none shrink-0">
+              <Receipt className="w-4 h-4 text-slate-500 shrink-0" />
+              <span>{lockedPrefix}</span>
+            </div>
             <input
               id="receipt-number"
               type="text"
-              value={receiptNumber}
-              onChange={(e) => setReceiptNumber(e.target.value)}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={20}
+              value={receiptDigits}
+              onChange={(e) => setReceiptDigits(sanitizeReceiptDigitsInput(e.target.value))}
               required
-              placeholder="e.g. 000125 or GBC/2026-27/001"
-              className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-3.5 py-2.5 text-sm font-mono text-sky-300 placeholder-slate-600 focus:outline-none focus:border-sky-500 tracking-wide font-medium"
+              placeholder="e.g. 142"
+              className="flex-1 min-w-0 bg-slate-900 px-3.5 py-2.5 text-sm font-mono tabular-nums text-sky-300 placeholder-slate-600 focus:outline-none tracking-wide font-medium"
             />
           </div>
-          <p className="text-[11px] text-slate-500">
-            Leading zeros are preserved. Must be unique within {activeChurch?.name} across all years.
-          </p>
+
+          {availabilityState === 'checking' && (
+            <p className="text-[11px] text-slate-400 font-mono">
+              Checking availability for {fullReceiptPreview}...
+            </p>
+          )}
+          {availabilityState === 'available' && (
+            <p className="text-[11px] text-emerald-400 flex items-center gap-1.5 font-mono tabular-nums">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Available: {fullReceiptPreview}</span>
+            </p>
+          )}
+          {availabilityState === 'duplicate' && (
+            <p className="text-[11px] text-red-400 flex items-center gap-1.5 font-mono tabular-nums">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>Duplicate receipt: {fullReceiptPreview} is already registered.</span>
+            </p>
+          )}
+          {availabilityState === 'idle' && (
+            <p className="text-[11px] text-slate-500">
+              Enter positive numbers only (leading zeros are removed automatically). Prefix updates
+              from church code and donation date.
+            </p>
+          )}
         </div>
 
         {/* 2. MEMBER SELECTOR & INACTIVE WARNING */}
@@ -643,8 +723,8 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
         <div className="pt-3 border-t border-slate-800">
           <button
             type="submit"
-            disabled={isSubmitting || isLoadingLookups}
-            className="w-full bg-sky-600 hover:bg-sky-500 text-white font-semibold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-sky-600/20 text-xs sm:text-sm"
+            disabled={isSubmitting || isLoadingLookups || availabilityState === 'duplicate'}
+            className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-sky-600/20 text-xs sm:text-sm"
           >
             <Receipt className="w-4 h-4" />
             <span>{isSubmitting ? 'Reserving Receipt & Saving...' : 'Save & Issue Receipt'}</span>

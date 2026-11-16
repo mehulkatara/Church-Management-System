@@ -18,7 +18,6 @@ export interface FinancialYearInfo {
 
 /**
  * Normalizes a receipt number for case-insensitive, whitespace-trimmed uniqueness comparison.
- * Preserves leading zeroes.
  */
 export function normalizeReceiptNumber(raw: string): string {
   if (!raw) return '';
@@ -26,7 +25,114 @@ export function normalizeReceiptNumber(raw: string): string {
 }
 
 /**
- * Validates a manually entered receipt number.
+ * Builds the locked automatic receipt prefix from church code and Indian Financial Year
+ * derived from the donation date: UPPER(CHURCH_CODE)/YYYY-YY/
+ */
+export function buildAutoReceiptPrefix(
+  churchCode: string | null | undefined,
+  donationDate: string | Date
+): string {
+  const cleanCode = (churchCode || 'CHURCH').trim().toUpperCase() || 'CHURCH';
+  const fyCode = getFinancialYear(donationDate || new Date()).fyCode;
+  return `${cleanCode}/${fyCode}/`;
+}
+
+/**
+ * Sanitizes receipt number input to digits only and strips all leading zeros.
+ * Handles accidental pastes containing slashes by extracting the trailing segment first.
+ */
+export function sanitizeReceiptDigitsInput(raw: string): string {
+  if (!raw || typeof raw !== 'string') return '';
+  const segment = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : raw;
+  const digitsOnly = segment.replace(/\D/g, '').slice(0, 20);
+  return digitsOnly.replace(/^0+/, '');
+}
+
+/**
+ * Validates the user-entered receipt number (positive integer digits only, no leading zeros).
+ */
+export function validateNumericReceiptSuffix(raw: string | undefined | null): {
+  valid: boolean;
+  error?: string;
+  numericValue: string;
+} {
+  if (!raw || typeof raw !== 'string') {
+    return { valid: false, error: 'Receipt number is required.', numericValue: '' };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { valid: false, error: 'Receipt number cannot be blank.', numericValue: '' };
+  }
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return { valid: false, error: 'Receipt number must contain digits (0-9) only.', numericValue: '' };
+  }
+  if (trimmed.length > 20) {
+    return { valid: false, error: 'Receipt number cannot exceed 20 digits.', numericValue: '' };
+  }
+  const stripped = trimmed.replace(/^0+/, '');
+  if (!stripped) {
+    return { valid: false, error: 'Receipt number must be greater than zero.', numericValue: '' };
+  }
+  return { valid: true, numericValue: stripped };
+}
+
+/**
+ * Combines church code, donation date financial year, and positive numeric suffix
+ * into the canonical receipt identifier and lowercase uniqueness key.
+ */
+export function buildFullReceiptNumber(
+  churchCode: string | null | undefined,
+  donationDate: string | Date,
+  rawDigits: string | undefined | null
+): {
+  valid: boolean;
+  error?: string;
+  prefix: string;
+  numericValue: string;
+  fullReceiptNumber: string;
+  normalizedKey: string;
+} {
+  const prefix = buildAutoReceiptPrefix(churchCode, donationDate);
+  const validation = validateNumericReceiptSuffix(rawDigits);
+  if (!validation.valid) {
+    return {
+      valid: false,
+      error: validation.error,
+      prefix,
+      numericValue: '',
+      fullReceiptNumber: '',
+      normalizedKey: '',
+    };
+  }
+  const fullReceiptNumber = `${prefix}${validation.numericValue}`;
+  return {
+    valid: true,
+    prefix,
+    numericValue: validation.numericValue,
+    fullReceiptNumber,
+    normalizedKey: fullReceiptNumber.toLowerCase(),
+  };
+}
+
+/**
+ * Extracts trailing positive integer digits (without leading zeros) from an existing receipt number.
+ */
+export function extractReceiptSuffixDigits(fullReceipt: string | null | undefined): string {
+  if (!fullReceipt || typeof fullReceipt !== 'string') return '';
+  const trimmed = fullReceipt.trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('/')) {
+    const tail = trimmed.slice(trimmed.lastIndexOf('/') + 1);
+    const tailDigits = tail.replace(/\D/g, '').replace(/^0+/, '');
+    if (tailDigits) return tailDigits;
+  }
+  const trailingMatch = /(\d+)$/.exec(trimmed);
+  if (!trailingMatch) return '';
+  return trailingMatch[1].replace(/^0+/, '');
+}
+
+/**
+ * Validates a full receipt number string.
  */
 export function validateReceiptNumber(raw: string | undefined | null): {
   valid: boolean;
@@ -44,17 +150,6 @@ export function validateReceiptNumber(raw: string | undefined | null): {
     return { valid: false, error: 'Receipt number cannot exceed 50 characters.', normalized: '' };
   }
   return { valid: true, normalized: trimmed.toLowerCase() };
-}
-
-/**
- * Suggests a receipt number prefix based on the financial year and optional receipt book code.
- */
-export function suggestReceiptPrefix(fyCode: string, bookCode?: string): string {
-  const cleanFy = fyCode.trim();
-  if (bookCode && bookCode.trim()) {
-    return `${bookCode.trim().toUpperCase()}/${cleanFy}/`;
-  }
-  return `REC/${cleanFy}/`;
 }
 
 /**

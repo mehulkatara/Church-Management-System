@@ -19,7 +19,6 @@ export interface Church {
   address: string | null;
   phone: string | null;
   email: string | null;
-  receipt_prefix: string;
   is_active: boolean;
   created_at: string;
   updated_at: string;

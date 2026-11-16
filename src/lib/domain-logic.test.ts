@@ -4,7 +4,11 @@ import {
   getFinancialYear,
   normalizeReceiptNumber,
   validateReceiptNumber,
-  suggestReceiptPrefix,
+  buildAutoReceiptPrefix,
+  sanitizeReceiptDigitsInput,
+  validateNumericReceiptSuffix,
+  buildFullReceiptNumber,
+  extractReceiptSuffixDigits,
   calculateRankings,
   validateMemberStatusChange,
   checkRolePermission,
@@ -45,25 +49,49 @@ test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into
   assert.equal(fyNov.fyCode, '2026-27');
 });
 
-test('Receipt number normalization preserves leading zeroes and trims whitespace', () => {
-  assert.equal(normalizeReceiptNumber('  000125  '), '000125');
-  assert.equal(normalizeReceiptNumber('CH-2026-00125'), 'ch-2026-00125');
-  assert.equal(normalizeReceiptNumber('2026-27/000125'), '2026-27/000125');
-  assert.equal(normalizeReceiptNumber('  REC-ABC  '), 'rec-abc');
+test('Receipt number normalization trims whitespace and lowercases cleanly', () => {
+  assert.equal(normalizeReceiptNumber('  GBC-CHN/2026-27/125  '), 'gbc-chn/2026-27/125');
+  assert.equal(normalizeReceiptNumber('CH1/2026-27/42'), 'ch1/2026-27/42');
 });
 
 test('Receipt number validation checks required non-blank values', () => {
   assert.equal(validateReceiptNumber('').valid, false);
   assert.equal(validateReceiptNumber('   ').valid, false);
   assert.equal(validateReceiptNumber(null).valid, false);
-  const ok = validateReceiptNumber('00456');
+  const ok = validateReceiptNumber('GBC-CHN/2026-27/456');
   assert.equal(ok.valid, true);
-  assert.equal(ok.normalized, '00456');
+  assert.equal(ok.normalized, 'gbc-chn/2026-27/456');
 });
 
-test('Receipt prefix suggestion generates clean prefix without hardcoding full number', () => {
-  assert.equal(suggestReceiptPrefix('2026-27'), 'REC/2026-27/');
-  assert.equal(suggestReceiptPrefix('2026-27', 'ch1'), 'CH1/2026-27/');
+test('Automatic receipt prefix uses church code and financial year from donation date with numeric-only suffix (no leading zeros)', () => {
+  assert.equal(buildAutoReceiptPrefix('gbc-chn', '2026-03-31'), 'GBC-CHN/2025-26/');
+  assert.equal(buildAutoReceiptPrefix('gbc-chn', '2026-04-01'), 'GBC-CHN/2026-27/');
+
+  // Sanitization strips non-digits and leading zeros
+  assert.equal(sanitizeReceiptDigitsInput('0042'), '42');
+  assert.equal(sanitizeReceiptDigitsInput('abc0142xyz'), '142');
+  assert.equal(sanitizeReceiptDigitsInput('000'), '');
+  assert.equal(sanitizeReceiptDigitsInput('GBC-CHN/2026-27/0089'), '89');
+
+  // Suffix validation rejects zero, empty, and non-numeric values
+  assert.equal(validateNumericReceiptSuffix('').valid, false);
+  assert.equal(validateNumericReceiptSuffix('0').valid, false);
+  assert.equal(validateNumericReceiptSuffix('000').valid, false);
+  assert.equal(validateNumericReceiptSuffix('A12').valid, false);
+  const validNum = validateNumericReceiptSuffix('00142');
+  assert.equal(validNum.valid, true);
+  assert.equal(validNum.numericValue, '142');
+
+  // Canonical full receipt builder & legacy suffix extraction
+  const built = buildFullReceiptNumber('gbc-chn', '2026-11-16', '0142');
+  assert.equal(built.valid, true);
+  assert.equal(built.prefix, 'GBC-CHN/2026-27/');
+  assert.equal(built.numericValue, '142');
+  assert.equal(built.fullReceiptNumber, 'GBC-CHN/2026-27/142');
+  assert.equal(built.normalizedKey, 'gbc-chn/2026-27/142');
+
+  assert.equal(extractReceiptSuffixDigits('GBC-CHN/2026-27/0142'), '142');
+  assert.equal(extractReceiptSuffixDigits('REC-0055'), '55');
 });
 
 test('Competition ranking logic: 1, 2, 2, 4 ties and inactive member inclusion', () => {

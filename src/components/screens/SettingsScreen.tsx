@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { Settings, Shield, Receipt, Trophy, MessageSquare, CheckCircle, Save } from 'lucide-react';
+import { buildAutoReceiptPrefix } from '../../lib/domain-logic';
+import { Settings, Receipt, Trophy, MessageSquare, CheckCircle, AlertCircle, Save } from 'lucide-react';
 
 export const SettingsScreen: React.FC = () => {
   const { activeChurch, refreshUserData } = useAuth();
 
-  const [receiptPrefix, setReceiptPrefix] = useState(activeChurch?.receipt_prefix || 'REC/2026-27/');
   const [maskLeaderboardDefault, setMaskLeaderboardDefault] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const sampleAutoPrefix = buildAutoReceiptPrefix(activeChurch?.code, new Date());
 
   useEffect(() => {
     if (!supabase || !activeChurch) return;
@@ -40,25 +43,21 @@ export const SettingsScreen: React.FC = () => {
 
     setIsSaving(true);
     setSuccessMessage(null);
+    setErrorMessage(null);
 
     try {
-      // 1. Update church receipt prefix
-      await supabase
-        .from('churches')
-        .update({ receipt_prefix: receiptPrefix.trim() })
-        .eq('id', activeChurch.id);
-
-      // 2. Update church settings for leaderboard
-      await supabase.from('church_settings').upsert({
+      const { error } = await supabase.from('church_settings').upsert({
         church_id: activeChurch.id,
         setting_key: 'leaderboard',
         setting_value: { mask_names_by_default: maskLeaderboardDefault },
       });
 
+      if (error) throw error;
+
       setSuccessMessage('Church settings successfully updated!');
       await refreshUserData();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Failed to save settings.');
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to save settings.');
     } finally {
       setIsSaving(false);
     }
@@ -83,27 +82,32 @@ export const SettingsScreen: React.FC = () => {
         </div>
       )}
 
+      {errorMessage && (
+        <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-300 rounded-xl text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
       <form
         onSubmit={handleSave}
         className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 text-xs"
       >
-        {/* Receipt Prefix */}
+        {/* Automatic Receipt Format (Read-only explanation) */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-white font-semibold">
             <Receipt className="w-4 h-4 text-sky-400" />
-            <span>Receipt Book Prefix Suggestion</span>
+            <span>Automatic Receipt Number Format</span>
           </div>
           <p className="text-slate-400 text-[11px] leading-relaxed">
-            When paper receipt books restart every financial year, this prefix will be suggested in
-            the donation entry form. Staff can still modify or complete the manual receipt number.
+            Manual receipt prefix configuration is disabled. Receipt prefixes are automatically
+            generated from your church code and the donation date&apos;s financial year (1 April
+            &ndash; 31 March). Staff only enter the numeric receipt number.
           </p>
-          <input
-            type="text"
-            value={receiptPrefix}
-            onChange={(e) => setReceiptPrefix(e.target.value)}
-            required
-            className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-white font-mono text-sm focus:outline-none focus:border-sky-500"
-          />
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono text-sky-300 flex items-center justify-between gap-2">
+            <span>Current Financial Year Format</span>
+            <span className="font-semibold tabular-nums">{sampleAutoPrefix}142</span>
+          </div>
         </div>
 
         {/* Leaderboard Privacy */}
@@ -113,8 +117,8 @@ export const SettingsScreen: React.FC = () => {
             <span>Leaderboard Privacy Policy</span>
           </div>
           <p className="text-slate-400 text-[11px] leading-relaxed">
-            By default, donor names are masked (e.g. "John D***") to protect personal financial
-            confidentiality while acknowledging church stewardship.
+            By default, donor names are masked (e.g. &quot;John D***&quot;) to protect personal
+            financial confidentiality while acknowledging church stewardship.
           </p>
 
           <label className="flex items-center gap-2.5 p-3 bg-slate-950 rounded-xl border border-slate-800 cursor-pointer text-slate-300">

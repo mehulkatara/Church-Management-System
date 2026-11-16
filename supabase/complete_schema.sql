@@ -134,7 +134,6 @@ CREATE TABLE IF NOT EXISTS public.churches (
     address TEXT,
     phone TEXT,
     email TEXT,
-    receipt_prefix TEXT DEFAULT 'REC',
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
@@ -813,7 +812,148 @@ CREATE POLICY "Church staff can view member share links"
 -- SECTION 6: ATOMIC BUSINESS & SECURITY DEFINER RPCS
 -- ==============================================================================
 
--- 1. RECORD DONATION (Atomic transaction with receipt reservation & audit)
+-- 0. AUTOMATIC RECEIPT PREFIX & AVAILABILITY CHECK HELPERS
+CREATE OR REPLACE FUNCTION public.compute_church_fy_code(
+    p_donation_date DATE
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    v_month INT;
+    v_year INT;
+    v_start_year INT;
+BEGIN
+    IF p_donation_date IS NULL THEN
+        RAISE EXCEPTION 'Donation date is required to determine financial year.';
+    END IF;
+
+    v_month := EXTRACT(MONTH FROM p_donation_date)::INT;
+    v_year := EXTRACT(YEAR FROM p_donation_date)::INT;
+    v_start_year := CASE WHEN v_month >= 4 THEN v_year ELSE v_year - 1 END;
+
+    RETURN v_start_year::TEXT || '-' || right((v_start_year + 1)::TEXT, 2);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.normalize_auto_receipt_number(
+    p_church_code TEXT,
+    p_donation_date DATE,
+    p_receipt_input TEXT
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    v_clean_code TEXT := upper(trim(COALESCE(p_church_code, '')));
+    v_fy_code TEXT;
+    v_expected_prefix TEXT;
+    v_raw TEXT := trim(COALESCE(p_receipt_input, ''));
+    v_digits TEXT;
+    v_clean_digits TEXT;
+BEGIN
+    IF length(v_clean_code) = 0 THEN
+        RAISE EXCEPTION 'Church code is required to generate receipt prefix.';
+    END IF;
+
+    v_fy_code := public.compute_church_fy_code(p_donation_date);
+    v_expected_prefix := v_clean_code || '/' || v_fy_code || '/';
+
+    IF strpos(v_raw, '/') > 0 THEN
+        IF lower(left(v_raw, length(v_expected_prefix))) = lower(v_expected_prefix) THEN
+            v_digits := substr(v_raw, length(v_expected_prefix) + 1);
+        ELSE
+            RAISE EXCEPTION 'Receipt prefix is locked to "%" based on church code and donation date.', v_expected_prefix;
+        END IF;
+    ELSE
+        v_digits := v_raw;
+    END IF;
+
+    IF v_digits !~ '^[0-9]+$' THEN
+        RAISE EXCEPTION 'Receipt number must contain positive numeric digits only.';
+    END IF;
+
+    IF length(v_digits) > 20 THEN
+        RAISE EXCEPTION 'Receipt number cannot exceed 20 digits.';
+    END IF;
+
+    v_clean_digits := regexp_replace(v_digits, '^0+', '');
+    IF v_clean_digits = '' THEN
+        RAISE EXCEPTION 'Receipt number must be greater than zero.';
+    END IF;
+
+    RETURN v_expected_prefix || v_clean_digits;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.check_receipt_number_availability(
+    p_church_id UUID,
+    p_donation_date DATE,
+    p_receipt_number TEXT,
+    p_exclude_donation_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_role TEXT;
+    v_church_code TEXT;
+    v_canonical TEXT;
+    v_normalized TEXT;
+    v_conflict BOOLEAN;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(p_church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant', 'collector') THEN
+        RAISE EXCEPTION 'Unauthorized: Only church staff can verify receipt availability.';
+    END IF;
+
+    SELECT code INTO v_church_code
+    FROM public.churches
+    WHERE id = p_church_id;
+
+    IF v_church_code IS NULL THEN
+        RAISE EXCEPTION 'Church not found.';
+    END IF;
+
+    v_canonical := public.normalize_auto_receipt_number(v_church_code, p_donation_date, p_receipt_number);
+    v_normalized := lower(v_canonical);
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.receipt_number_registry r
+        WHERE r.church_id = p_church_id
+          AND r.normalized_receipt_number = v_normalized
+          AND (
+              p_exclude_donation_id IS NULL
+              OR NOT (r.donation_id = p_exclude_donation_id AND r.status = 'active')
+          )
+    ) INTO v_conflict;
+
+    RETURN jsonb_build_object(
+        'available', NOT v_conflict,
+        'formatted_receipt', v_canonical
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.check_receipt_number_availability(UUID, DATE, TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.check_receipt_number_availability(UUID, DATE, TEXT, UUID) TO authenticated;
+
+-- 1. RECORD DONATION (Atomic transaction with auto church-code + FY prefix & receipt reservation)
 CREATE OR REPLACE FUNCTION public.record_donation(
     p_church_id UUID,
     p_member_id UUID,
@@ -835,6 +975,7 @@ AS $$
 DECLARE
     v_actor_id UUID := auth.uid();
     v_role TEXT;
+    v_canonical_receipt TEXT;
     v_normalized_receipt TEXT;
     v_existing_donation_id UUID;
     v_donation_id UUID;
@@ -846,6 +987,7 @@ DECLARE
     v_acc_active BOOLEAN;
     v_member_name TEXT;
     v_church_name TEXT;
+    v_church_code TEXT;
     v_cat_name TEXT;
 BEGIN
     IF v_actor_id IS NULL THEN
@@ -877,10 +1019,16 @@ BEGIN
         RAISE EXCEPTION 'Donation amount must be greater than zero.';
     END IF;
 
-    IF p_receipt_number IS NULL OR length(trim(p_receipt_number)) = 0 THEN
-        RAISE EXCEPTION 'Receipt number is required.';
+    SELECT name, code INTO v_church_name, v_church_code
+    FROM public.churches
+    WHERE id = p_church_id;
+
+    IF v_church_code IS NULL THEN
+        RAISE EXCEPTION 'Church not found.';
     END IF;
-    v_normalized_receipt := lower(trim(p_receipt_number));
+
+    v_canonical_receipt := public.normalize_auto_receipt_number(v_church_code, p_donation_date, p_receipt_number);
+    v_normalized_receipt := lower(v_canonical_receipt);
 
     SELECT church_id, full_name INTO v_member_church_id, v_member_name
     FROM public.members WHERE id = p_member_id;
@@ -909,13 +1057,11 @@ BEGIN
         RAISE EXCEPTION 'Selected receiving account is inactive.';
     END IF;
 
-    SELECT name INTO v_church_name FROM public.churches WHERE id = p_church_id;
-
     IF EXISTS (
         SELECT 1 FROM public.receipt_number_registry
         WHERE church_id = p_church_id AND normalized_receipt_number = v_normalized_receipt
     ) THEN
-        RAISE EXCEPTION 'This receipt number already exists for this church. Please check the number and try again.';
+        RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_canonical_receipt;
     END IF;
 
     INSERT INTO public.donations (
@@ -935,7 +1081,7 @@ BEGIN
     ) VALUES (
         p_church_id,
         p_member_id,
-        trim(p_receipt_number),
+        v_canonical_receipt,
         p_donation_date,
         p_category_id,
         p_amount,
@@ -959,7 +1105,7 @@ BEGIN
     ) VALUES (
         p_church_id,
         v_normalized_receipt,
-        trim(p_receipt_number),
+        v_canonical_receipt,
         v_donation_id,
         'active',
         v_actor_id
@@ -1003,7 +1149,7 @@ BEGIN
         'donation.created',
         'donation',
         v_donation_id::text,
-        'Recorded donation of INR ' || p_amount || ' with receipt ' || trim(p_receipt_number),
+        'Recorded donation of INR ' || p_amount || ' with receipt ' || v_canonical_receipt,
         NULL,
         to_jsonb(v_new_donation),
         'Donation recorded'
@@ -1036,9 +1182,11 @@ DECLARE
     v_old_donation RECORD;
     v_new_donation RECORD;
     v_church_id UUID;
+    v_church_code TEXT;
     v_role TEXT;
     v_next_revision INT;
     v_old_norm_receipt TEXT;
+    v_new_canonical_receipt TEXT;
     v_new_norm_receipt TEXT;
 BEGIN
     IF v_actor_id IS NULL THEN
@@ -1069,15 +1217,21 @@ BEGIN
         RAISE EXCEPTION 'Unauthorized: Collectors and Members cannot edit saved donations.';
     END IF;
 
+    SELECT code INTO v_church_code FROM public.churches WHERE id = v_church_id;
+    IF v_church_code IS NULL THEN
+        RAISE EXCEPTION 'Church not found.';
+    END IF;
+
+    v_new_canonical_receipt := public.normalize_auto_receipt_number(v_church_code, p_new_donation_date, p_new_receipt_number);
     v_old_norm_receipt := lower(trim(v_old_donation.receipt_number));
-    v_new_norm_receipt := lower(trim(p_new_receipt_number));
+    v_new_norm_receipt := lower(v_new_canonical_receipt);
 
     IF v_old_norm_receipt <> v_new_norm_receipt THEN
         IF EXISTS (
             SELECT 1 FROM public.receipt_number_registry
             WHERE church_id = v_church_id AND normalized_receipt_number = v_new_norm_receipt
         ) THEN
-            RAISE EXCEPTION 'This receipt number already exists for this church. Please check the number and try again.';
+            RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_new_canonical_receipt;
         END IF;
 
         UPDATE public.receipt_number_registry
@@ -1094,7 +1248,7 @@ BEGIN
         ) VALUES (
             v_church_id,
             v_new_norm_receipt,
-            trim(p_new_receipt_number),
+            v_new_canonical_receipt,
             p_donation_id,
             'active',
             v_actor_id
@@ -1103,7 +1257,7 @@ BEGIN
 
     UPDATE public.donations
     SET
-        receipt_number = trim(p_new_receipt_number),
+        receipt_number = v_new_canonical_receipt,
         amount = p_new_amount,
         category_id = p_new_category_id,
         receiving_account_id = p_new_receiving_account_id,

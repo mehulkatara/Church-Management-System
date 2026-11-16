@@ -7,6 +7,7 @@ import type {
   MemberPortalLeaderboardFy,
 } from '../types/database';
 import {
+  buildFullReceiptNumber,
   getFinancialYearOptions,
   getFinancialYear,
   maskDonorDisplayName,
@@ -236,7 +237,7 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
   const donations: MemberPortalDonation[] = [
     {
       id: `prev-don-${stored.member_id}-1`,
-      receipt_number: `GBC/${currentFy.fyCode}/0142`,
+      receipt_number: buildFullReceiptNumber(stored.church_code, currentFy.startDate, '142').fullReceiptNumber,
       donation_date: currentFy.startDate,
       amount: 5000,
       payment_method: 'UPI',
@@ -247,7 +248,7 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
     },
     {
       id: `prev-don-${stored.member_id}-2`,
-      receipt_number: `GBC/${currentFy.fyCode}/0089`,
+      receipt_number: buildFullReceiptNumber(stored.church_code, currentFy.startDate, '89').fullReceiptNumber,
       donation_date: currentFy.startDate,
       amount: 2500,
       payment_method: 'Cash',
@@ -258,7 +259,7 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
     },
     {
       id: `prev-don-${stored.member_id}-3`,
-      receipt_number: `GBC/${prevFy.fyCode}/0912`,
+      receipt_number: buildFullReceiptNumber(stored.church_code, prevFy.startDate, '912').fullReceiptNumber,
       donation_date: prevFy.startDate,
       amount: 10000,
       payment_method: 'Bank Transfer',

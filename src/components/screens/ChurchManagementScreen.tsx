@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Church } from '../../types/database';
+import { buildAutoReceiptPrefix } from '../../lib/domain-logic';
 import { Modal } from '../common/Modals';
-import { Building2, Plus, Phone, Mail, MapPin, CheckCircle, Hash } from 'lucide-react';
+import { Building2, Plus, Phone, Mail, MapPin } from 'lucide-react';
 
 export const ChurchManagementScreen: React.FC = () => {
   const { authorizedChurches, refreshUserData } = useAuth();
@@ -15,7 +16,6 @@ export const ChurchManagementScreen: React.FC = () => {
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [receiptPrefix, setReceiptPrefix] = useState('REC/2026-27/');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -42,7 +42,6 @@ export const ChurchManagementScreen: React.FC = () => {
         address: address.trim() || null,
         phone: phone.trim() || null,
         email: email.trim() || null,
-        receipt_prefix: receiptPrefix.trim() || 'REC/2026-27/',
         is_active: true,
       }).select().single();
 
@@ -134,8 +133,10 @@ export const ChurchManagementScreen: React.FC = () => {
             </div>
 
             <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono">
-              <span className="text-slate-500">Receipt Prefix:</span>
-              <span className="text-sky-300 font-semibold">{church.receipt_prefix}</span>
+              <span className="text-slate-500">Auto Receipt Format:</span>
+              <span className="text-sky-300 font-semibold">
+                {buildAutoReceiptPrefix(church.code, new Date())}#
+              </span>
             </div>
           </div>
         ))}
@@ -216,15 +217,12 @@ export const ChurchManagementScreen: React.FC = () => {
               </div>
             </div>
 
-            <div>
-              <label className="block text-slate-300 font-medium mb-1">Default Receipt Prefix</label>
-              <input
-                type="text"
-                value={receiptPrefix}
-                onChange={(e) => setReceiptPrefix(e.target.value)}
-                placeholder="e.g. GBC/2026-27/"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-sky-500"
-              />
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] text-slate-400">
+              Receipt prefixes are automatically derived from the church code and donation date&apos;s
+              financial year:{' '}
+              <span className="font-mono text-sky-300">
+                {buildAutoReceiptPrefix(code || 'CODE', new Date())}#
+              </span>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">

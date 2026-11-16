@@ -2,7 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Donation, DonationRevision, DonationCategory, ReceivingAccount, PaymentMethod } from '../../types/database';
-import { formatINR, getFinancialYearOptions, formatSmsMessage } from '../../lib/domain-logic';
+import {
+  formatINR,
+  getFinancialYearOptions,
+  formatSmsMessage,
+  buildFullReceiptNumber,
+  sanitizeReceiptDigitsInput,
+  extractReceiptSuffixDigits,
+} from '../../lib/domain-logic';
+import { checkReceiptAvailability } from '../../lib/receipt-availability';
 import { ReasonModal, Modal } from '../common/Modals';
 import {
   Receipt,
@@ -49,7 +57,7 @@ export const DonationsScreen: React.FC = () => {
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Correction Form Fields
-  const [editReceiptNumber, setEditReceiptNumber] = useState('');
+  const [editReceiptDigits, setEditReceiptDigits] = useState('');
   const [editAmount, setEditAmount] = useState('');
   const [editCategoryId, setEditCategoryId] = useState('');
   const [editAccountId, setEditAccountId] = useState('');
@@ -58,6 +66,16 @@ export const DonationsScreen: React.FC = () => {
   const [editReference, setEditReference] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editReason, setEditReason] = useState('');
+  const [editAvailability, setEditAvailability] = useState<
+    'idle' | 'checking' | 'available' | 'duplicate'
+  >('idle');
+  const editCheckCounterRef = React.useRef(0);
+
+  const editReceiptBuild = buildFullReceiptNumber(
+    activeChurch?.code,
+    editDate || new Date(),
+    editReceiptDigits
+  );
 
   const canEditOrCancel = isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant';
 
@@ -132,7 +150,7 @@ export const DonationsScreen: React.FC = () => {
 
   // Open Correction Modal
   const handleOpenCorrect = (donation: Donation) => {
-    setEditReceiptNumber(donation.receipt_number);
+    setEditReceiptDigits(extractReceiptSuffixDigits(donation.receipt_number));
     setEditAmount(String(donation.amount));
     setEditCategoryId(donation.category_id);
     setEditAccountId(donation.receiving_account_id);
@@ -142,13 +160,64 @@ export const DonationsScreen: React.FC = () => {
     setEditNotes(donation.notes || '');
     setEditReason('');
     setActionError(null);
+    setEditAvailability('idle');
     setIsCorrectModalOpen(true);
   };
+
+  useEffect(() => {
+    if (!isCorrectModalOpen || !activeChurch || !selectedDonation || !editReceiptBuild.valid || !editDate) {
+      setEditAvailability('idle');
+      return;
+    }
+
+    const requestId = ++editCheckCounterRef.current;
+    setEditAvailability('checking');
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await checkReceiptAvailability({
+          churchId: activeChurch.id,
+          churchCode: activeChurch.code,
+          donationDate: editDate,
+          receiptDigits: editReceiptBuild.numericValue,
+          excludeDonationId: selectedDonation.id,
+        });
+        if (requestId !== editCheckCounterRef.current) return;
+        setEditAvailability(res.available ? 'available' : 'duplicate');
+      } catch {
+        if (requestId !== editCheckCounterRef.current) return;
+        setEditAvailability('idle');
+      }
+    }, 220);
+
+    return () => clearTimeout(timer);
+  }, [
+    isCorrectModalOpen,
+    activeChurch?.id,
+    activeChurch?.code,
+    selectedDonation?.id,
+    editDate,
+    editReceiptBuild.valid,
+    editReceiptBuild.numericValue,
+  ]);
 
   // Submit Correction
   const handleSubmitCorrection = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || !selectedDonation) return;
+    if (!supabase || !selectedDonation || !activeChurch) return;
+
+    const built = buildFullReceiptNumber(activeChurch.code, editDate, editReceiptDigits);
+    if (!built.valid) {
+      setActionError(built.error || 'Please enter a valid positive receipt number.');
+      return;
+    }
+
+    if (editAvailability === 'duplicate') {
+      setActionError(
+        `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
+      );
+      return;
+    }
 
     if (!editReason || editReason.trim().length < 3) {
       setActionError('A clear audit reason of at least 3 characters is strictly required.');
@@ -159,9 +228,26 @@ export const DonationsScreen: React.FC = () => {
     setActionError(null);
 
     try {
+      const checkRes = await checkReceiptAvailability({
+        churchId: activeChurch.id,
+        churchCode: activeChurch.code,
+        donationDate: editDate,
+        receiptDigits: built.numericValue,
+        excludeDonationId: selectedDonation.id,
+      });
+
+      if (!checkRes.available) {
+        setEditAvailability('duplicate');
+        setActionError(
+          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
+        );
+        setIsActionLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase.rpc('correct_donation', {
         p_donation_id: selectedDonation.id,
-        p_new_receipt_number: editReceiptNumber.trim(),
+        p_new_receipt_number: built.numericValue,
         p_new_amount: parseFloat(editAmount),
         p_new_category_id: editCategoryId,
         p_new_receiving_account_id: editAccountId,
@@ -616,15 +702,53 @@ export const DonationsScreen: React.FC = () => {
               the registry and cannot be reassigned to any other donation.
             </div>
 
-            <div>
-              <label className="block text-slate-300 font-medium mb-1">Receipt Number</label>
-              <input
-                type="text"
-                value={editReceiptNumber}
-                onChange={(e) => setEditReceiptNumber(e.target.value)}
-                required
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 font-mono text-sky-300 focus:outline-none focus:border-sky-500"
-              />
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="edit-receipt-number" className="block text-slate-300 font-medium">
+                  Receipt Number <span className="text-red-400">*</span>
+                </label>
+                <span className="text-[10px] font-mono text-slate-400 tabular-nums">
+                  Prefix locked: {editReceiptBuild.prefix}
+                </span>
+              </div>
+              <div
+                className={`flex items-stretch rounded-xl border bg-slate-950 overflow-hidden focus-within:border-sky-500 ${
+                  editAvailability === 'duplicate' ? 'border-red-500' : 'border-slate-700'
+                }`}
+              >
+                <span className="px-3 py-2 bg-slate-900 border-r border-slate-700 font-mono tabular-nums text-slate-300 select-none shrink-0">
+                  {editReceiptBuild.prefix}
+                </span>
+                <input
+                  id="edit-receipt-number"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={20}
+                  value={editReceiptDigits}
+                  onChange={(e) => setEditReceiptDigits(sanitizeReceiptDigitsInput(e.target.value))}
+                  required
+                  placeholder="e.g. 142"
+                  className="flex-1 min-w-0 bg-slate-950 px-3 py-2 font-mono tabular-nums text-sky-300 focus:outline-none"
+                />
+              </div>
+              {editAvailability === 'checking' && (
+                <p className="text-[11px] text-slate-400 font-mono">
+                  Checking availability for {editReceiptBuild.fullReceiptNumber}...
+                </p>
+              )}
+              {editAvailability === 'available' && (
+                <p className="text-[11px] text-emerald-400 flex items-center gap-1 font-mono tabular-nums">
+                  <CheckCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Available: {editReceiptBuild.fullReceiptNumber}</span>
+                </p>
+              )}
+              {editAvailability === 'duplicate' && (
+                <p className="text-[11px] text-red-400 flex items-center gap-1 font-mono tabular-nums">
+                  <XCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Duplicate receipt: {editReceiptBuild.fullReceiptNumber} is already reserved.</span>
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -712,8 +836,8 @@ export const DonationsScreen: React.FC = () => {
               </button>
               <button
                 type="submit"
-                disabled={isActionLoading}
-                className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-xl transition-colors"
+                disabled={isActionLoading || editAvailability === 'duplicate'}
+                className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors"
               >
                 {isActionLoading ? 'Saving Correction...' : 'Submit Correction'}
               </button>
