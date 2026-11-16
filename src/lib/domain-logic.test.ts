@@ -444,3 +444,45 @@ test('Accountant can assign and toggle Collector access while role precedence el
   assert.equal(getHighestChurchRole([]), 'none');
 });
 
+import {
+  maskDonorDisplayName,
+  buildMemberPortalUrl,
+  buildMemberShareWhatsAppUrl,
+} from './domain-logic';
+
+test('All church staff including Collector can manage single-use member share links; Member cannot', () => {
+  assert.equal(checkRolePermission('platform_admin', 'manage_member_share_links').allowed, true);
+  assert.equal(checkRolePermission('admin', 'manage_member_share_links').allowed, true);
+  assert.equal(checkRolePermission('accountant', 'manage_member_share_links').allowed, true);
+  assert.equal(checkRolePermission('collector', 'manage_member_share_links').allowed, true);
+  assert.equal(checkRolePermission('member', 'manage_member_share_links').allowed, false);
+  assert.equal(checkRolePermission('none', 'manage_member_share_links').allowed, false);
+});
+
+test('Member portal URL, WhatsApp link builder, and donor privacy masking behave consistently', () => {
+  const url = buildMemberPortalUrl('https://church.example.com/', 'abc123token');
+  assert.equal(url, 'https://church.example.com/member-portal?token=abc123token');
+
+  const waWithPhone = buildMemberShareWhatsAppUrl({
+    phone: '9840012345',
+    memberName: 'Mary Joseph',
+    churchName: 'Grace Bethel Church',
+    portalUrl: url,
+  });
+  assert.match(waWithPhone, /^https:\/\/wa\.me\/919840012345\?text=/);
+  assert.match(decodeURIComponent(waWithPhone), /single-use/i);
+
+  const waNoPhone = buildMemberShareWhatsAppUrl({
+    phone: null,
+    memberName: 'Mary Joseph',
+    churchName: 'Grace Bethel Church',
+    portalUrl: url,
+  });
+  assert.match(waNoPhone, /^https:\/\/wa\.me\/\?text=/);
+
+  // Donor masking preserves self and masks peers when enabled
+  assert.equal(maskDonorDisplayName('Mary Joseph', true, true), 'Mary Joseph');
+  assert.equal(maskDonorDisplayName('Mary Joseph', false, true), 'Mary J***');
+  assert.equal(maskDonorDisplayName('Ebenezer', false, true), 'E***');
+  assert.equal(maskDonorDisplayName('Mary Joseph', false, false), 'Mary Joseph');
+});

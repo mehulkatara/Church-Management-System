@@ -246,3 +246,72 @@ export interface ReportExport {
   file_name: string;
   created_at: string;
 }
+
+export type ShareLinkStatus = 'active' | 'consumed' | 'revoked';
+
+export interface MemberShareLink {
+  id: string;
+  church_id: string;
+  member_id: string;
+  status: ShareLinkStatus;
+  created_by: string | null;
+  created_at: string;
+  consumed_at: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
+}
+
+export interface MemberPortalDonation {
+  id: string;
+  receipt_number: string;
+  donation_date: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  payment_reference: string | null;
+  notes: string | null;
+  category_name: string;
+  receiving_account_name: string;
+}
+
+export interface MemberPortalLeaderboardEntry {
+  rank: number;
+  display_name: string;
+  display_member_number: string;
+  total_amount: number;
+  is_active: boolean;
+  is_self: boolean;
+}
+
+export interface MemberPortalLeaderboardFy {
+  fy_code: string;
+  top_10: MemberPortalLeaderboardEntry[];
+  my_standing: MemberPortalLeaderboardEntry | null;
+}
+
+export interface MemberPortalPayload {
+  success: boolean;
+  error_code?: 'invalid' | 'revoked' | 'already_used';
+  message?: string;
+  consumed_at?: string;
+  mask_names_by_default?: boolean;
+  church?: {
+    id: string;
+    code: string;
+    name: string;
+    address: string | null;
+    phone: string | null;
+  };
+  member?: {
+    id: string;
+    member_number: string;
+    full_name: string;
+    contact_phone: string | null;
+    village_name: string | null;
+    gender: Gender | null;
+    date_of_birth: string | null;
+    joining_date: string;
+    membership_status: MembershipStatus;
+  };
+  donations?: MemberPortalDonation[];
+  leaderboard_fys?: MemberPortalLeaderboardFy[];
+}

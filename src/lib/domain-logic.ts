@@ -243,7 +243,8 @@ export type PermittedAction =
   | 'approve_access_request' // Accountant only
   | 'generate_bulk_reports' // Admin or Accountant only (Collector CANNOT)
   | 'view_all_church_donations' // Admin, Accountant, Collector
-  | 'view_own_donations_only'; // Member
+  | 'view_own_donations_only' // Member
+  | 'manage_member_share_links'; // Admin, Accountant, Collector
 
 export function checkRolePermission(
   role: UserRole | 'none',
@@ -319,6 +320,11 @@ export function checkRolePermission(
 
     case 'view_own_donations_only':
       return { allowed: true };
+
+    case 'manage_member_share_links':
+      return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'collector'
+        ? { allowed: true }
+        : { allowed: false, reason: 'Only church staff can generate or revoke member links.' };
 
     default:
       return { allowed: false, reason: 'Action not permitted.' };
@@ -847,3 +853,53 @@ export function filterVillageSuggestions(
   };
 }
 
+/**
+ * Masks donor display names for privacy-preserving church leaderboards.
+ */
+export function maskDonorDisplayName(
+  name: string,
+  isSelf: boolean,
+  maskEnabled: boolean
+): string {
+  const clean = (name || '').trim();
+  if (!clean) return 'Member';
+  if (isSelf || !maskEnabled) return clean;
+  const parts = clean.split(/\s+/);
+  if (parts.length === 1) {
+    return `${parts[0][0]}***`;
+  }
+  return `${parts[0]} ${parts[parts.length - 1][0]}***`;
+}
+
+/**
+ * Builds the unauthenticated single-use member portal URL.
+ */
+export function buildMemberPortalUrl(origin: string, rawToken: string): string {
+  const cleanOrigin = (origin || '').replace(/\/+$/, '');
+  const cleanToken = (rawToken || '').trim();
+  return `${cleanOrigin}/member-portal?token=${encodeURIComponent(cleanToken)}`;
+}
+
+/**
+ * Builds a WhatsApp click-to-chat URL with a polite single-use link message.
+ */
+export function buildMemberShareWhatsAppUrl(params: {
+  phone?: string | null;
+  memberName: string;
+  churchName: string;
+  portalUrl: string;
+}): string {
+  const digits = (params.phone || '').replace(/\D/g, '');
+  let waPhone = '';
+  if (/^[6-9]\d{9}$/.test(digits)) {
+    waPhone = `91${digits}`;
+  } else if (/^91[6-9]\d{9}$/.test(digits)) {
+    waPhone = digits;
+  }
+
+  const text = `Hello ${params.memberName}, here is your personal single-use view-only link for ${params.churchName}. Please note this link expires automatically after you open it once:\n${params.portalUrl}`;
+  const encodedText = encodeURIComponent(text);
+  return waPhone
+    ? `https://wa.me/${waPhone}?text=${encodedText}`
+    : `https://wa.me/?text=${encodedText}`;
+}

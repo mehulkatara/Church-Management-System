@@ -335,7 +335,7 @@ WHERE email = 'admin@yourchurch.org';`}
                     Consolidated Database Migration
                   </h3>
                   <p className="text-xs text-slate-400">
-                    File: <code>supabase/migrations/20261115000001_complete_schema.sql</code> (18 tables, RLS policies, triggers &amp; atomic RPCs)
+                    File: <code>supabase/migrations/20261115000001_complete_schema.sql</code> (19 tables, RLS policies, triggers &amp; atomic RPCs)
                   </p>
                 </div>
                 <button
@@ -349,9 +349,9 @@ WHERE email = 'admin@yourchurch.org';`}
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
                 <p className="text-sky-400">-- Key tables created (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
-                <p>access_requests, donation_categories, receiving_accounts, donations, receipt_number_registry,</p>
-                <p>donation_revisions, audit_logs, church_settings, notifications, notification_jobs,</p>
-                <p>notification_attempts, report_exports</p>
+                <p>member_share_links, access_requests, donation_categories, receiving_accounts, donations,</p>
+                <p>receipt_number_registry, donation_revisions, audit_logs, church_settings, notifications,</p>
+                <p>notification_jobs, notification_attempts, report_exports</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
@@ -359,6 +359,7 @@ WHERE email = 'admin@yourchurch.org';`}
                 <p>&bull; <code>handle_new_user()</code>: sync auth.users sign-ups into public.profiles</p>
                 <p>&bull; <code>record_donation()</code>, <code>correct_donation()</code>, <code>cancel_donation()</code></p>
                 <p>&bull; <code>change_member_status()</code> &amp; <code>update_my_member_profile()</code></p>
+                <p>&bull; <code>create_member_share_link()</code>, <code>revoke_member_share_link()</code>, <code>redeem_member_share_link()</code></p>
                 <p>&bull; <code>submit_profile_request()</code>, <code>approve_access_request_v2()</code>, <code>return_access_request_for_correction()</code></p>
                 <p>&bull; <code>get_church_staff_management_data()</code>, <code>assign_church_staff_role()</code>, <code>toggle_church_staff_status()</code></p>
               </div>

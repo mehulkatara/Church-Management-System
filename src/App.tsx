@@ -21,6 +21,7 @@ import { ChurchManagementScreen } from './components/screens/ChurchManagementScr
 import { StaffManagementScreen } from './components/screens/StaffManagementScreen';
 import { MyProfileScreen } from './components/screens/MyProfileScreen';
 import { SettingsScreen } from './components/screens/SettingsScreen';
+import { MemberPortalScreen } from './components/screens/MemberPortalScreen';
 import {
   PublicHomePage,
   PrivacyPolicyPage,
@@ -35,6 +36,11 @@ function resolvePublicRoute(pathname: string): PublicRoute | null {
   if (clean === '/privacy-policy' || clean === '/privacy') return 'privacy';
   if (clean === '/terms-of-service' || clean === '/terms') return 'terms';
   return null;
+}
+
+function isMemberPortalRoute(pathname: string): boolean {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  return clean === '/member-portal';
 }
 
 const MainAppContent: React.FC<{
@@ -219,6 +225,11 @@ export default function App() {
   };
 
   const publicRoute = resolvePublicRoute(pathname);
+
+  // Unauthenticated single-use Member Portal link route (bypasses auth & setup gates)
+  if (isMemberPortalRoute(pathname) && !hasOAuthCallback()) {
+    return <MemberPortalScreen onNavigateHome={() => navigateTo('/home')} />;
+  }
 
   // Always allow public Home, Privacy Policy, and Terms of Service routes without login or DB setup
   if (publicRoute && !hasOAuthCallback()) {

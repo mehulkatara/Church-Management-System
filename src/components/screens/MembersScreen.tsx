@@ -1,14 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
-import type { Member, Gender, MembershipStatus } from '../../types/database';
+import type { Member, Gender, MembershipStatus, MemberShareLink } from '../../types/database';
 import {
   GENDER_LABELS,
   validateNewChurchMember,
   buildVillageSuggestions,
   formatIndianMobileInput,
   normalizePhoneNumber,
+  checkRolePermission,
+  buildMemberPortalUrl,
+  buildMemberShareWhatsAppUrl,
 } from '../../lib/domain-logic';
+import {
+  fetchLatestMemberShareLink,
+  createMemberShareLink,
+  revokeMemberShareLink,
+} from '../../lib/member-share-links';
 import { ReasonModal, Modal } from '../common/Modals';
 import { VillageCityInput } from '../common/VillageCityInput';
 import {
@@ -23,6 +31,11 @@ import {
   MapPin,
   Calendar,
   Lock,
+  Link2,
+  Copy,
+  Check,
+  ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 
 export const MembersScreen: React.FC = () => {
@@ -47,6 +60,15 @@ export const MembersScreen: React.FC = () => {
   const [isStatusLoading, setIsStatusLoading] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
 
+  // Single-Use Member Portal Share Link Modal State
+  const [shareTargetMember, setShareTargetMember] = useState<Member | null>(null);
+  const [latestShareLink, setLatestShareLink] = useState<MemberShareLink | null>(null);
+  const [generatedPortalUrl, setGeneratedPortalUrl] = useState<string | null>(null);
+  const [isShareLoading, setIsShareLoading] = useState(false);
+  const [isShareBusy, setIsShareBusy] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [copiedShareUrl, setCopiedShareUrl] = useState(false);
+
   // Form Fields
   const [fullName, setFullName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
@@ -69,6 +91,10 @@ export const MembersScreen: React.FC = () => {
     isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant' || activeRole === 'collector';
   const canEditGender =
     isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant' || activeRole === 'collector';
+  const canManageShareLinks = checkRolePermission(
+    isPlatformAdmin ? 'platform_admin' : activeRole,
+    'manage_member_share_links'
+  ).allowed;
 
   const fetchMembers = async () => {
     if (!supabase || !activeChurch) return;
@@ -321,6 +347,93 @@ export const MembersScreen: React.FC = () => {
     }
   };
 
+  // Single-Use Member Portal Link Handlers
+  const openShareLinkModal = async (member: Member) => {
+    if (!activeChurch) return;
+    setShareTargetMember(member);
+    setLatestShareLink(null);
+    setGeneratedPortalUrl(null);
+    setShareError(null);
+    setCopiedShareUrl(false);
+    setIsShareLoading(true);
+
+    try {
+      const latest = await fetchLatestMemberShareLink(activeChurch.id, member.id);
+      setLatestShareLink(latest);
+    } catch (err: unknown) {
+      setShareError(err instanceof Error ? err.message : 'Failed to load link status.');
+    } finally {
+      setIsShareLoading(false);
+    }
+  };
+
+  const handleGenerateShareLink = async () => {
+    if (!activeChurch || !shareTargetMember) return;
+    setIsShareBusy(true);
+    setShareError(null);
+    setCopiedShareUrl(false);
+
+    try {
+      const { link, rawToken } = await createMemberShareLink({
+        churchId: activeChurch.id,
+        member: shareTargetMember,
+        churchMeta: {
+          name: activeChurch.name,
+          code: activeChurch.code,
+          address: activeChurch.address,
+          phone: activeChurch.phone,
+        },
+      });
+      setLatestShareLink(link);
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      setGeneratedPortalUrl(buildMemberPortalUrl(origin, rawToken));
+    } catch (err: unknown) {
+      setShareError(err instanceof Error ? err.message : 'Could not create single-use link.');
+    } finally {
+      setIsShareBusy(false);
+    }
+  };
+
+  const handleRevokeShareLink = async () => {
+    if (!activeChurch || !latestShareLink) return;
+    setIsShareBusy(true);
+    setShareError(null);
+
+    try {
+      const updated = await revokeMemberShareLink(activeChurch.id, latestShareLink.id);
+      setLatestShareLink((prev) => (prev ? { ...prev, ...updated } : updated));
+      setGeneratedPortalUrl(null);
+    } catch (err: unknown) {
+      setShareError(err instanceof Error ? err.message : 'Could not revoke member link.');
+    } finally {
+      setIsShareBusy(false);
+    }
+  };
+
+  const handleCopyShareUrl = async () => {
+    if (!generatedPortalUrl) return;
+    try {
+      await navigator.clipboard.writeText(generatedPortalUrl);
+      setCopiedShareUrl(true);
+      setTimeout(() => setCopiedShareUrl(false), 2500);
+    } catch {
+      setShareError('Clipboard permission blocked. Please copy the link manually from the field below.');
+    }
+  };
+
+  const formatShareTimestamp = (iso: string | null) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   // Filtered member list
   const filteredMembers = members.filter((m) => {
     if (searchQuery) {
@@ -516,12 +629,25 @@ export const MembersScreen: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <button
-                          onClick={() => openEditModal(m)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                        >
-                          Edit
-                        </button>
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          {canManageShareLinks && (
+                            <button
+                              type="button"
+                              onClick={() => openShareLinkModal(m)}
+                              className="px-2.5 py-1 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 transition-colors inline-flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                            >
+                              <Link2 className="w-3 h-3" />
+                              <span>Share Link</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(m)}
+                            className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -850,6 +976,172 @@ export const MembersScreen: React.FC = () => {
           isDestructive={statusNewValue === 'inactive'}
           isLoading={isStatusLoading}
         />
+      )}
+
+      {/* SINGLE-USE MEMBER PORTAL LINK MODAL (All Staff Roles including Collector) */}
+      {shareTargetMember && (
+        <Modal
+          isOpen={Boolean(shareTargetMember)}
+          onClose={() => {
+            setShareTargetMember(null);
+            setGeneratedPortalUrl(null);
+            setShareError(null);
+          }}
+          title={`Single-Use Portal Link: ${shareTargetMember.full_name}`}
+          maxWidth="md"
+        >
+          <div className="space-y-4 text-xs">
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-white">{shareTargetMember.full_name}</span>
+                <span className="font-mono text-sky-400">{shareTargetMember.member_number}</span>
+              </div>
+              <div className="text-slate-400">
+                <span>View-only access without sign-in</span>
+                <span className="mx-1.5 text-slate-600">&middot;</span>
+                <span>Profile, donations &amp; leaderboard</span>
+                <span className="mx-1.5 text-slate-600">&middot;</span>
+                <span>Expires after opening once</span>
+              </div>
+            </div>
+
+            {shareError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl">
+                {shareError}
+              </div>
+            )}
+
+            {isShareLoading ? (
+              <div className="py-6 text-center text-slate-400 font-mono">
+                Checking latest link status...
+              </div>
+            ) : (
+              <>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-400">Latest Link Status</span>
+                    <span
+                      className={`font-mono font-semibold uppercase ${
+                        latestShareLink?.status === 'active'
+                          ? 'text-emerald-400'
+                          : latestShareLink?.status === 'consumed'
+                          ? 'text-amber-400'
+                          : latestShareLink?.status === 'revoked'
+                          ? 'text-red-400'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {latestShareLink ? latestShareLink.status : 'No link generated yet'}
+                    </span>
+                  </div>
+
+                  {latestShareLink && (
+                    <div className="text-[11px] text-slate-400 space-y-0.5 font-mono">
+                      <div>Created: {formatShareTimestamp(latestShareLink.created_at)}</div>
+                      {latestShareLink.consumed_at && (
+                        <div>Opened &amp; Expired: {formatShareTimestamp(latestShareLink.consumed_at)}</div>
+                      )}
+                      {latestShareLink.revoked_at && (
+                        <div>Revoked: {formatShareTimestamp(latestShareLink.revoked_at)}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {generatedPortalUrl && (
+                  <div className="bg-slate-950 border border-sky-500/30 rounded-xl p-3.5 space-y-3">
+                    <div className="text-sky-300 font-medium">
+                      New single-use link ready (copy and send privately to member):
+                    </div>
+                    <input
+                      type="text"
+                      readOnly
+                      value={generatedPortalUrl}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-[11px] font-mono text-white focus:outline-none focus:border-sky-500"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyShareUrl}
+                        className="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        {copiedShareUrl ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy Link</span>
+                          </>
+                        )}
+                      </button>
+
+                      <a
+                        href={buildMemberShareWhatsAppUrl({
+                          phone: shareTargetMember.contact_phone,
+                          memberName: shareTargetMember.full_name,
+                          churchName: activeChurch?.name || 'our church',
+                          portalUrl: generatedPortalUrl,
+                        })}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 font-medium inline-flex items-center gap-1.5 transition-colors"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Share via WhatsApp</span>
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-800">
+                  <div>
+                    {latestShareLink?.status === 'active' && (
+                      <button
+                        type="button"
+                        disabled={isShareBusy}
+                        onClick={handleRevokeShareLink}
+                        className="px-3 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 font-medium transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        Revoke Active Link
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShareTargetMember(null);
+                        setGeneratedPortalUrl(null);
+                        setShareError(null);
+                      }}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition-colors cursor-pointer"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isShareBusy}
+                      onClick={handleGenerateShareLink}
+                      className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-xl inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isShareBusy ? 'animate-spin' : ''}`} />
+                      <span>
+                        {latestShareLink?.status === 'active'
+                          ? 'Replace & Generate New Link'
+                          : 'Generate Single-Use Link'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
       )}
     </div>
   );
