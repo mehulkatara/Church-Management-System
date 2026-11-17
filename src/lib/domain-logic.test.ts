@@ -473,7 +473,6 @@ test('Accountant can assign and toggle Collector access while role precedence el
 });
 
 import {
-  maskDonorDisplayName,
   buildMemberPortalUrl,
   buildMemberShareWhatsAppUrl,
 } from './domain-logic';
@@ -487,7 +486,7 @@ test('All church staff including Collector can manage single-use member share li
   assert.equal(checkRolePermission('none', 'manage_member_share_links').allowed, false);
 });
 
-test('Member portal URL, WhatsApp link builder, and donor privacy masking behave consistently', () => {
+test('Member portal URL and WhatsApp link builder behave consistently', () => {
   const url = buildMemberPortalUrl('https://church.example.com/', 'abc123token');
   assert.equal(url, 'https://church.example.com/member-portal?token=abc123token');
 
@@ -507,10 +506,4 @@ test('Member portal URL, WhatsApp link builder, and donor privacy masking behave
     portalUrl: url,
   });
   assert.match(waNoPhone, /^https:\/\/wa\.me\/\?text=/);
-
-  // Donor masking preserves self and masks peers when enabled
-  assert.equal(maskDonorDisplayName('Mary Joseph', true, true), 'Mary Joseph');
-  assert.equal(maskDonorDisplayName('Mary Joseph', false, true), 'Mary J***');
-  assert.equal(maskDonorDisplayName('Ebenezer', false, true), 'E***');
-  assert.equal(maskDonorDisplayName('Mary Joseph', false, false), 'Mary Joseph');
 });

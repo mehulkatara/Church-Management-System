@@ -10,7 +10,6 @@ import {
   buildFullReceiptNumber,
   getFinancialYearOptions,
   getFinancialYear,
-  maskDonorDisplayName,
 } from './domain-logic';
 
 const PREVIEW_LINKS_KEY = 'cms_preview_share_links';
@@ -284,8 +283,8 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
       top_10: [
         {
           rank: 1,
-          display_name: maskDonorDisplayName('Samuel Jayakumar', false, true),
-          display_member_number: '••••',
+          display_name: 'Samuel Jayakumar',
+          display_member_number: 'M-0003',
           total_amount: 14500,
           is_active: true,
           is_self: false,
@@ -300,8 +299,8 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
         },
         {
           rank: 3,
-          display_name: maskDonorDisplayName('Grace Hannah', false, true),
-          display_member_number: '••••',
+          display_name: 'Grace Hannah',
+          display_member_number: 'M-0002',
           total_amount: 5200,
           is_active: true,
           is_self: false,
@@ -329,8 +328,8 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
         },
         {
           rank: 2,
-          display_name: maskDonorDisplayName('Ebenezer Raj', false, true),
-          display_member_number: '••••',
+          display_name: 'Ebenezer Raj',
+          display_member_number: 'M-0001',
           total_amount: 8000,
           is_active: true,
           is_self: false,
@@ -342,7 +341,6 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
   return {
     success: true,
     consumed_at: new Date().toISOString(),
-    mask_names_by_default: true,
     church: {
       id: stored.church_id,
       code: stored.church_code,

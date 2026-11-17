@@ -54,11 +54,9 @@ VALUES
   ('m1000000-0000-0000-0000-000000000005', 'a1000000-0000-0000-0000-000000000001', 'M-0005', 'Paul Vijay', '+91 98405 66778', 'paul.vijay@example.com', 'Adyar', 'male', '2025-04-12', 'active')
 ON CONFLICT (id) DO NOTHING;
 
--- 5. Insert Church Settings (e.g. Leaderboard privacy & SMS config placeholders)
+-- 5. Insert Church Settings (SMS config placeholders)
 INSERT INTO public.church_settings (church_id, setting_key, setting_value)
 VALUES
-  ('a1000000-0000-0000-0000-000000000001', 'leaderboard', '{"mask_names_by_default": true, "show_top_10": true}'::jsonb),
   ('a1000000-0000-0000-0000-000000000001', 'sms_provider', '{"mode": "send_from_phone", "provider_enabled": false}'::jsonb),
-  ('a2000000-0000-0000-0000-000000000002', 'leaderboard', '{"mask_names_by_default": true, "show_top_10": true}'::jsonb),
   ('a2000000-0000-0000-0000-000000000002', 'sms_provider', '{"mode": "send_from_phone", "provider_enabled": false}'::jsonb)
 ON CONFLICT (church_id, setting_key) DO NOTHING;

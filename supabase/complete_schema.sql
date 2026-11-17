@@ -2862,8 +2862,6 @@ DECLARE
     v_church RECORD;
     v_member RECORD;
     v_donations JSONB;
-    v_mask_names BOOLEAN := true;
-    v_setting_value JSONB;
     v_leaderboard_fys JSONB;
 BEGIN
     IF length(v_clean_token) < 16 THEN
@@ -2941,14 +2939,6 @@ BEGIN
         );
     END IF;
 
-    SELECT setting_value INTO v_setting_value
-    FROM public.church_settings
-    WHERE church_id = v_link.church_id AND setting_key = 'leaderboard';
-
-    IF v_setting_value IS NOT NULL AND v_setting_value ? 'mask_names_by_default' THEN
-        v_mask_names := COALESCE((v_setting_value ->> 'mask_names_by_default')::boolean, true);
-    END IF;
-
     SELECT COALESCE(jsonb_agg(
         jsonb_build_object(
             'id', d.id,
@@ -2971,7 +2961,7 @@ BEGIN
       AND d.member_id = v_link.member_id
       AND d.deleted_at IS NULL;
 
-    -- Build server-masked competition rankings grouped by Indian Financial Year (Apr 1 - Mar 31)
+    -- Build competition rankings grouped by Indian Financial Year (Apr 1 - Mar 31)
     WITH fy_donations AS (
         SELECT
             d.member_id,
@@ -3023,15 +3013,8 @@ BEGIN
             total_amount,
             is_active,
             is_self,
-            CASE
-                WHEN is_self OR NOT v_mask_names THEN full_name
-                WHEN strpos(trim(full_name), ' ') = 0 THEN left(trim(full_name), 1) || '***'
-                ELSE split_part(trim(full_name), ' ', 1) || ' ' || left(reverse(split_part(reverse(trim(full_name)), ' ', 1)), 1) || '***'
-            END AS display_name,
-            CASE
-                WHEN is_self OR NOT v_mask_names THEN member_number
-                ELSE '••••'
-            END AS display_member_number
+            full_name AS display_name,
+            member_number AS display_member_number
         FROM ranked
     ),
     fy_summaries AS (
@@ -3105,7 +3088,6 @@ BEGIN
     RETURN jsonb_build_object(
         'success', true,
         'consumed_at', v_consumed_at,
-        'mask_names_by_default', v_mask_names,
         'church', jsonb_build_object(
             'id', v_church.id,
             'code', v_church.code,

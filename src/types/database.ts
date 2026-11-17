@@ -292,7 +292,6 @@ export interface MemberPortalPayload {
   error_code?: 'invalid' | 'revoked' | 'already_used';
   message?: string;
   consumed_at?: string;
-  mask_names_by_default?: boolean;
   church?: {
     id: string;
     code: string;

@@ -949,24 +949,6 @@ export function filterVillageSuggestions(
 }
 
 /**
- * Masks donor display names for privacy-preserving church leaderboards.
- */
-export function maskDonorDisplayName(
-  name: string,
-  isSelf: boolean,
-  maskEnabled: boolean
-): string {
-  const clean = (name || '').trim();
-  if (!clean) return 'Member';
-  if (isSelf || !maskEnabled) return clean;
-  const parts = clean.split(/\s+/);
-  if (parts.length === 1) {
-    return `${parts[0][0]}***`;
-  }
-  return `${parts[0]} ${parts[parts.length - 1][0]}***`;
-}
-
-/**
  * Builds the unauthenticated single-use member portal URL.
  */
 export function buildMemberPortalUrl(origin: string, rawToken: string): string {

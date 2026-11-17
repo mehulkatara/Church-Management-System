@@ -249,7 +249,6 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
 
   const { church, member } = payload;
   const isActive = member.membership_status === 'active';
-  const maskEnabled = payload.mask_names_by_default !== false;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
@@ -572,12 +571,6 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
                 </h2>
                 <p className="text-xs text-slate-400 mt-0.5">
                   FY {selectedFy} standings
-                  {maskEnabled && (
-                    <>
-                      <span className="mx-1.5 text-slate-600">&middot;</span>
-                      <span>Other donor identities masked for privacy</span>
-                    </>
-                  )}
                 </p>
               </div>
             </div>

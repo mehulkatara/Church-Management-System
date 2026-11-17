@@ -352,6 +352,7 @@ WHERE email = 'admin@yourchurch.org';`}
                 <p>1. 20261115000001_complete_schema.sql &mdash; Initial baseline (18 tables, RLS policies &amp; core RPCs)</p>
                 <p>2. 20261116000001_member_share_links.sql &mdash; Single-use member portal share links, RLS &amp; 3 RPCs</p>
                 <p>3. 20261116000002_auto_receipt_prefix_numeric.sql &mdash; Remove receipt_prefix; auto church-code + FY prefix &amp; live duplicate check</p>
+                <p>4. 20261116000003_remove_leaderboard_privacy_policy.sql &mdash; Remove leaderboard privacy masking policy &amp; show full donor names</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">

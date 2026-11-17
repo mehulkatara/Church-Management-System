@@ -8,26 +8,16 @@ import {
   DonorRankingInput,
   DonorRankedOutput,
 } from '../../lib/domain-logic';
-import {
-  Trophy,
-  Medal,
-  Shield,
-  Eye,
-  EyeOff,
-  User,
-  Calendar,
-  Sparkles,
-} from 'lucide-react';
+import { Trophy, Sparkles } from 'lucide-react';
 
 export const LeaderboardScreen: React.FC = () => {
-  const { activeChurch, user, activeRole } = useAuth();
+  const { activeChurch, user } = useAuth();
 
   const fyOptions = getFinancialYearOptions(5);
   const [selectedFy, setSelectedFy] = useState(fyOptions[0].fyCode);
   const [rankings, setRankings] = useState<DonorRankedOutput[]>([]);
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [maskIdentities, setMaskIdentities] = useState(true);
 
   const currentFyInfo = fyOptions.find((f) => f.fyCode === selectedFy) || fyOptions[0];
 
@@ -49,19 +39,7 @@ export const LeaderboardScreen: React.FC = () => {
           if (link) setCurrentMemberId(link.member_id);
         }
 
-        // 2. Fetch church setting for leaderboard masking default
-        const { data: setting } = await supabase
-          .from('church_settings')
-          .select('setting_value')
-          .eq('church_id', activeChurch.id)
-          .eq('setting_key', 'leaderboard')
-          .maybeSingle();
-
-        if (setting?.setting_value?.mask_names_by_default !== undefined) {
-          setMaskIdentities(Boolean(setting.setting_value.mask_names_by_default));
-        }
-
-        // 3. Fetch all valid non-deleted donations for this church in this FY
+        // 2. Fetch all valid non-deleted donations for this church in this FY
         const { data: donations, error } = await supabase
           .from('donations')
           .select(`
@@ -81,7 +59,12 @@ export const LeaderboardScreen: React.FC = () => {
         const memberTotalsMap = new Map<string, DonorRankingInput>();
 
         for (const d of donations || []) {
-          const m = d.member as any;
+          const m = d.member as unknown as {
+            id: string;
+            full_name: string;
+            member_number: string;
+            membership_status: string;
+          } | null;
           if (!m) continue;
 
           const existing = memberTotalsMap.get(m.id) || {
@@ -107,46 +90,37 @@ export const LeaderboardScreen: React.FC = () => {
     };
 
     fetchLeaderboard();
-  }, [activeChurch, selectedFy, user]);
+  }, [activeChurch, selectedFy, user, currentFyInfo.startDate, currentFyInfo.endDate]);
 
   const top10 = rankings.slice(0, 10);
   const currentMemberRankObj = currentMemberId
     ? rankings.find((r) => r.memberId === currentMemberId)
     : null;
 
-  const maskName = (name: string, isSelf: boolean) => {
-    if (isSelf || !maskIdentities) return name;
-    const parts = name.trim().split(' ');
-    if (parts.length === 1) {
-      return `${parts[0][0]}***`;
-    }
-    return `${parts[0]} ${parts[parts.length - 1][0]}***`;
-  };
-
   const getRankBadge = (rank: number) => {
     if (rank === 1) {
       return (
-        <span className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs flex items-center justify-center border border-amber-500/40">
+        <span className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-300 font-bold text-xs tabular-nums flex items-center justify-center border border-amber-500/40">
           1
         </span>
       );
     }
     if (rank === 2) {
       return (
-        <span className="w-6 h-6 rounded-full bg-slate-300/20 text-slate-200 font-bold text-xs flex items-center justify-center border border-slate-300/40">
+        <span className="w-6 h-6 rounded-full bg-slate-300/20 text-slate-200 font-bold text-xs tabular-nums flex items-center justify-center border border-slate-300/40">
           2
         </span>
       );
     }
     if (rank === 3) {
       return (
-        <span className="w-6 h-6 rounded-full bg-amber-700/20 text-amber-500 font-bold text-xs flex items-center justify-center border border-amber-700/40">
+        <span className="w-6 h-6 rounded-full bg-amber-700/20 text-amber-500 font-bold text-xs tabular-nums flex items-center justify-center border border-amber-700/40">
           3
         </span>
       );
     }
     return (
-      <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 font-mono text-xs flex items-center justify-center">
+      <span className="w-6 h-6 rounded-full bg-slate-800 text-slate-400 font-mono tabular-nums text-xs flex items-center justify-center">
         {rank}
       </span>
     );
@@ -188,13 +162,13 @@ export const LeaderboardScreen: React.FC = () => {
             <Sparkles className="w-6 h-6" />
           </div>
           <div>
-            <span className="text-[11px] text-slate-400 uppercase font-mono tracking-wider block">
+            <span className="text-[11px] text-slate-400 font-mono tracking-wider block">
               Your Personal Standing
             </span>
             <h2 className="text-base font-bold text-white">
               {currentMemberRankObj ? (
                 <span>
-                  Rank <strong className="text-sky-400">#{currentMemberRankObj.rank}</strong> in{' '}
+                  Rank <strong className="text-sky-400 tabular-nums">#{currentMemberRankObj.rank}</strong> in{' '}
                   {currentFyInfo.label}
                 </span>
               ) : (
@@ -202,21 +176,12 @@ export const LeaderboardScreen: React.FC = () => {
               )}
             </h2>
             {currentMemberRankObj && (
-              <span className="text-xs text-emerald-400 font-mono">
+              <span className="text-xs text-emerald-400 font-mono tabular-nums">
                 Total Giving: {formatINR(currentMemberRankObj.totalAmount)}
               </span>
             )}
           </div>
         </div>
-
-        {/* Privacy Toggle (Admin or viewer) */}
-        <button
-          onClick={() => setMaskIdentities(!maskIdentities)}
-          className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center gap-1.5 transition-colors"
-        >
-          {maskIdentities ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Eye className="w-3.5 h-3.5 text-sky-400" />}
-          <span>{maskIdentities ? 'Identities Masked' : 'Identities Visible'}</span>
-        </button>
       </div>
 
       {/* Leaderboard Table (Top 10 Summary) */}
@@ -230,7 +195,7 @@ export const LeaderboardScreen: React.FC = () => {
               Competition ranking (1, 2, 2, 4). Includes valid non-deleted donations.
             </span>
           </div>
-          <span className="text-[11px] text-slate-400 font-mono">
+          <span className="text-[11px] text-slate-400 font-mono tabular-nums">
             {rankings.length} Qualifying Donors
           </span>
         </div>
@@ -249,35 +214,33 @@ export const LeaderboardScreen: React.FC = () => {
                 <div
                   key={donor.memberId}
                   className={`px-5 py-3.5 flex items-center justify-between hover:bg-slate-800/40 transition-colors ${
-                    isSelf ? 'bg-sky-500/10 border-l-2 border-sky-400' : ''
+                    isSelf ? 'bg-sky-500/10' : ''
                   }`}
                 >
                   <div className="flex items-center gap-3">
                     {getRankBadge(donor.rank)}
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white">
-                          {maskName(donor.memberName, isSelf)}
-                        </span>
+                        <span className="font-semibold text-white">{donor.memberName}</span>
                         {isSelf && (
-                          <span className="bg-sky-500/20 text-sky-300 font-mono text-[10px] px-1.5 py-0.2 rounded border border-sky-500/30">
-                            YOU
+                          <span className="text-sky-300 font-medium">
+                            &middot; You
                           </span>
                         )}
                         {!donor.isActive && (
-                          <span className="bg-slate-800 text-slate-400 font-mono text-[10px] px-1.5 py-0.2 rounded">
-                            Historical
+                          <span className="text-slate-400">
+                            &middot; Historical
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-slate-500 font-mono">
-                        Rank #{donor.rank}
+                      <span className="text-[10px] text-slate-500 font-mono tabular-nums">
+                        Rank #{donor.rank} &middot; {donor.memberNumber}
                       </span>
                     </div>
                   </div>
 
                   <div className="text-right">
-                    <span className="font-mono font-bold text-emerald-400 text-sm">
+                    <span className="font-mono tabular-nums font-bold text-emerald-400 text-sm">
                       {formatINR(donor.totalAmount)}
                     </span>
                   </div>
@@ -288,11 +251,8 @@ export const LeaderboardScreen: React.FC = () => {
         </div>
 
         {/* Footer Note */}
-        <div className="p-3 bg-slate-950/60 border-t border-slate-800 text-[11px] text-slate-500 flex items-center justify-between">
-          <span>
-            Leaderboard ties depend on donation total only. Secondary ordering is stable.
-          </span>
-          <span className="text-slate-400">Strict privacy: Personal details are never exposed</span>
+        <div className="p-3 bg-slate-950/60 border-t border-slate-800 text-[11px] text-slate-500">
+          Leaderboard ties depend on donation total only. Secondary ordering is stable.
         </div>
       </div>
     </div>
