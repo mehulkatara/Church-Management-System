@@ -980,3 +980,107 @@ export function buildMemberShareWhatsAppUrl(params: {
     ? `https://wa.me/${waPhone}?text=${encodedText}`
     : `https://wa.me/?text=${encodedText}`;
 }
+
+const RESERVED_CHURCH_SLUGS = new Set([
+  'home',
+  'privacy',
+  'privacy-policy',
+  'terms',
+  'terms-of-service',
+  'member-portal',
+  'api',
+  'auth',
+  'c',
+]);
+
+/**
+ * Normalizes user input while typing into a custom church URL slug field
+ * (lowercase, replaces spaces/symbols with hyphens, preserves a trailing hyphen while typing).
+ */
+export function normalizeChurchSlugInput(value: string): string {
+  return (value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, 64);
+}
+
+/**
+ * Generates a clean finalized kebab-case slug suggestion from a church name or code.
+ */
+export function suggestChurchSlug(codeOrName: string): string {
+  const cleaned = normalizeChurchSlugInput(codeOrName).replace(/-+$/, '');
+  return cleaned.slice(0, 64);
+}
+
+/**
+ * Validates and finalizes a custom church URL slug before saving.
+ */
+export function validateChurchSlug(slug: string): {
+  valid: boolean;
+  normalized: string;
+  error?: string;
+} {
+  const normalized = normalizeChurchSlugInput(slug).replace(/-+$/, '');
+
+  if (!normalized) {
+    return { valid: false, normalized, error: 'Church URL slug is required.' };
+  }
+  if (normalized.length < 2) {
+    return {
+      valid: false,
+      normalized,
+      error: 'URL slug must be at least 2 characters long.',
+    };
+  }
+  if (normalized.length > 64) {
+    return {
+      valid: false,
+      normalized,
+      error: 'URL slug cannot exceed 64 characters.',
+    };
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      error: 'Use lowercase letters, numbers, and single hyphens only.',
+    };
+  }
+  if (RESERVED_CHURCH_SLUGS.has(normalized)) {
+    return {
+      valid: false,
+      normalized,
+      error: `"${normalized}" is a reserved application route. Please choose another slug.`,
+    };
+  }
+
+  return { valid: true, normalized };
+}
+
+/**
+ * Extracts a church slug from URL paths formatted as /c/<slug>.
+ */
+export function extractChurchSlugFromPath(pathname: string): string | null {
+  const clean = (pathname || '').replace(/\/+$/, '');
+  const match = /^\/c\/([^/]+)$/i.exec(clean);
+  if (!match) return null;
+
+  try {
+    const decoded = decodeURIComponent(match[1]);
+    const validation = validateChurchSlug(decoded);
+    return validation.valid ? validation.normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds the full shareable login and member onboarding URL for a church.
+ */
+export function buildChurchPortalUrl(origin: string, slug: string): string {
+  const cleanOrigin = (origin || '').replace(/\/+$/, '');
+  const cleanSlug = suggestChurchSlug(slug);
+  return `${cleanOrigin}/c/${cleanSlug}`;
+}

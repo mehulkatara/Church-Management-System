@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabaseConfig, hasOAuthCallback } from './lib/supabase';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SetupRequiredScreen } from './components/common/SetupRequiredScreen';
@@ -28,7 +28,7 @@ import {
   TermsOfServicePage,
   PublicRoute,
 } from './components/screens/PublicPages';
-import { ShieldCheck, Eye, Database } from 'lucide-react';
+import { Eye } from 'lucide-react';
 
 function resolvePublicRoute(pathname: string): PublicRoute | null {
   const clean = pathname.replace(/\/+$/, '') || '/';
@@ -49,7 +49,15 @@ const MainAppContent: React.FC<{
   publicRoute: PublicRoute | null;
   onNavigatePath: (path: string) => void;
 }> = ({ previewMode = false, onExitPreview, publicRoute, onNavigatePath }) => {
-  const { user, isLoading, activeRole, authorizedChurches, activeRequest, isPlatformAdmin } = useAuth();
+  const {
+    user,
+    isLoading,
+    isScopedChurchLoading,
+    authorizedChurches,
+    scopedChurch,
+    activeRequest,
+    isPlatformAdmin,
+  } = useAuth();
   const [currentScreen, setCurrentScreen] = useState<ScreenId>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
@@ -64,37 +72,43 @@ const MainAppContent: React.FC<{
     return <TermsOfServicePage onNavigate={onNavigatePath} isAuthenticated={Boolean(user)} />;
   }
 
-  if (isLoading && !previewMode) {
+  if (isScopedChurchLoading || (isLoading && !previewMode)) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-xs font-mono">
-        Loading church permissions...
+        Loading church portal...
       </div>
     );
   }
 
-  // Not logged in -> Show Google Sign-in Auth Screen
+  // Not logged in -> Show Google Sign-in Auth Screen (branded if scopedChurch is present)
   if (!user && !previewMode) {
     return <AuthScreen onNavigate={onNavigatePath} />;
   }
 
-  // Logged in via Google, but has 0 authorized churches
-  if (!previewMode && authorizedChurches.length === 0 && !isPlatformAdmin) {
-    // 1. If user clicked "Edit & Resubmit Profile", or has no request, or has an incomplete draft:
-    if (isEditingProfile || !activeRequest || activeRequest.status === 'draft') {
+  // Check if user lacks approved access to the target church (or has 0 authorized churches)
+  const hasScopedAccess =
+    !scopedChurch ||
+    isPlatformAdmin ||
+    authorizedChurches.some((c) => c.id === scopedChurch.id);
+
+  if (!previewMode && !isPlatformAdmin && (authorizedChurches.length === 0 || !hasScopedAccess)) {
+    const matchingRequest =
+      activeRequest && (!scopedChurch || activeRequest.church_id === scopedChurch.id)
+        ? activeRequest
+        : null;
+
+    // 1. If user clicked "Edit & Resubmit Profile", or has no request for target church, or has an incomplete draft:
+    if (isEditingProfile || !matchingRequest || matchingRequest.status === 'draft') {
       return (
         <CompleteProfileScreen
-          existingRequest={activeRequest}
+          existingRequest={matchingRequest}
           onSubmitted={() => setIsEditingProfile(false)}
         />
       );
     }
 
     // 2. If user's request is pending, returned_for_correction, or rejected:
-    return (
-      <ApprovalStatusScreen
-        onEditProfile={() => setIsEditingProfile(true)}
-      />
-    );
+    return <ApprovalStatusScreen onEditProfile={() => setIsEditingProfile(true)} />;
   }
 
   const renderScreen = () => {
@@ -214,7 +228,7 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const navigateTo = (path: string) => {
+  const navigateTo = useCallback((path: string) => {
     if (typeof window !== 'undefined') {
       if (window.location.pathname !== path) {
         window.history.pushState({}, '', path);
@@ -222,7 +236,16 @@ export default function App() {
       setPathname(path);
       window.scrollTo(0, 0);
     }
-  };
+  }, []);
+
+  const replacePath = useCallback((path: string) => {
+    if (typeof window !== 'undefined') {
+      if (window.location.pathname !== path) {
+        window.history.replaceState({}, '', path);
+      }
+      setPathname(path);
+    }
+  }, []);
 
   const publicRoute = resolvePublicRoute(pathname);
 
@@ -270,7 +293,7 @@ export default function App() {
   }
 
   return (
-    <AuthProvider>
+    <AuthProvider pathname={pathname} onReplacePath={replacePath}>
       <MainAppContent
         previewMode={isPreviewActive}
         onExitPreview={() => setIsPreviewActive(false)}

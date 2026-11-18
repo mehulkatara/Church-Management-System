@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { supabase, supabaseConfig } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { GOOGLE_PEOPLE_SCOPES } from '../../lib/google-people';
+import { buildChurchPortalUrl } from '../../lib/domain-logic';
+import { persistScopedChurchSlug } from '../../lib/church-slug';
 import {
   Church as ChurchIcon,
   AlertCircle,
@@ -11,8 +13,11 @@ import {
   Sparkles,
   UserCheck,
   KeyRound,
-  ExternalLink,
   Users,
+  MapPin,
+  Phone,
+  Mail,
+  Lock,
 } from 'lucide-react';
 
 interface AuthScreenProps {
@@ -21,7 +26,12 @@ interface AuthScreenProps {
 }
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate }) => {
-  const { signOut, loginAsPersona, authenticateWithToken } = useAuth();
+  const {
+    scopedChurch,
+    clearScopedChurch,
+    loginAsPersona,
+    authenticateWithToken,
+  } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfigGuide, setShowConfigGuide] = useState(false);
@@ -56,7 +66,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
     setError(null);
 
     try {
-      const redirectUrl = window.location.origin;
+      const redirectUrl = scopedChurch
+        ? buildChurchPortalUrl(window.location.origin, scopedChurch.slug)
+        : window.location.origin;
+
+      if (scopedChurch) {
+        persistScopedChurchSlug(scopedChurch.slug, true);
+      }
+
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -84,25 +101,75 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
   };
 
   // Preview Persona Login Handler (dispatches synthetic demo sessions for instant testing)
-  const handlePersonaLogin = (persona: 'applicant_new' | 'applicant_draft' | 'applicant_returned' | 'applicant_pending' | 'member' | 'accountant' | 'admin') => {
+  const handlePersonaLogin = (
+    persona:
+      | 'applicant_new'
+      | 'applicant_draft'
+      | 'applicant_returned'
+      | 'applicant_pending'
+      | 'member'
+      | 'accountant'
+      | 'admin'
+  ) => {
     loginAsPersona(persona);
   };
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center px-4 py-8">
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl space-y-6">
-        {/* Brand Header */}
-        <div className="text-center space-y-2">
-          <div className="w-14 h-14 rounded-2xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 mx-auto shadow-inner">
-            <ChurchIcon className="w-8 h-8" />
+        {/* Brand / Church-Specific Header */}
+        {scopedChurch ? (
+          <div className="space-y-4">
+            <div className="text-center space-y-2">
+              <div className="w-14 h-14 rounded-2xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 mx-auto shadow-inner">
+                <ChurchIcon className="w-8 h-8" />
+              </div>
+              <div className="text-[11px] font-mono text-sky-300 flex items-center justify-center gap-1.5">
+                <span>{scopedChurch.code}</span>
+                <span aria-hidden="true" className="text-slate-600">
+                  &middot;
+                </span>
+                <span>/c/{scopedChurch.slug}</span>
+              </div>
+              <h1 className="text-2xl font-bold text-white tracking-tight text-balance">
+                {scopedChurch.name}
+              </h1>
+              <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+                Dedicated congregation sign-in &amp; member onboarding portal.
+              </p>
+            </div>
+
+            {/* Full Church Contact & Location Details */}
+            <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-4 space-y-2 text-xs">
+              <div className="flex items-start gap-2.5 text-slate-300">
+                <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
+                <span>{scopedChurch.address || 'Address not listed'}</span>
+              </div>
+              <div className="flex items-center gap-2.5 text-slate-300">
+                <Phone className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span className="font-mono tabular-nums">
+                  {scopedChurch.phone || 'Phone not listed'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2.5 text-slate-300">
+                <Mail className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                <span className="truncate">{scopedChurch.email || 'Email not listed'}</span>
+              </div>
+            </div>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
-            Church Management System
-          </h1>
-          <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
-            Multi-church donation tracking, verified member roster, and accountant approvals.
-          </p>
-        </div>
+        ) : (
+          <div className="text-center space-y-2">
+            <div className="w-14 h-14 rounded-2xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 mx-auto shadow-inner">
+              <ChurchIcon className="w-8 h-8" />
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              Church Management System
+            </h1>
+            <p className="text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+              Multi-church donation tracking, verified member roster, and accountant approvals.
+            </p>
+          </div>
+        )}
 
         {/* Notice of Google-Only Policy */}
         <div className="bg-sky-950/30 border border-sky-500/20 rounded-2xl p-3.5 text-xs text-sky-200 flex items-start gap-2.5">
@@ -110,8 +177,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
           <div className="space-y-0.5 text-[11px] leading-relaxed">
             <span className="font-semibold text-white block">Google Authentication Required</span>
             <span>
-              All church members, accountants, and administrators sign in securely using their
-              verified Google account (including Google Workspace).
+              {scopedChurch
+                ? `Sign in with Google to access or request verified member onboarding at ${scopedChurch.name}.`
+                : 'All church members, accountants, and administrators sign in securely using their verified Google account (including Google Workspace).'}
             </span>
           </div>
         </div>
@@ -171,8 +239,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
               </strong>
               <p className="text-amber-200/90 leading-relaxed text-[11px]">
                 In your Supabase project, the default <strong>Site URL</strong> is set to{' '}
-                <code className="bg-slate-900 px-1 py-0.5 rounded text-amber-300 font-mono">http://localhost:3000</code>.
-                To redirect back to this live app after Google sign-in, update your Supabase settings:
+                <code className="bg-slate-900 px-1 py-0.5 rounded text-amber-300 font-mono">
+                  http://localhost:3000
+                </code>
+                . To redirect back to this live app after Google sign-in, update your Supabase settings:
               </p>
             </div>
           </div>
@@ -216,7 +286,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
             <span className="text-[10px] text-slate-500 font-mono">Instant Token Login</span>
           </div>
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            Paste the redirected <code className="text-amber-300 font-mono">http://localhost:3000/#access_token=...</code> URL
+            Paste the redirected{' '}
+            <code className="text-amber-300 font-mono">http://localhost:3000/#access_token=...</code> URL
             here to log in immediately without re-authenticating:
           </p>
           <div className="flex gap-2">
@@ -235,19 +306,23 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
               Log In
             </button>
           </div>
-          {tokenError && (
-            <p className="text-[11px] text-red-400">{tokenError}</p>
-          )}
+          {tokenError && <p className="text-[11px] text-red-400">{tokenError}</p>}
         </div>
-
 
         {/* Security & Access Workflow Notice */}
         <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
-          <span className="font-semibold text-slate-300 block">Strict Onboarding Separation:</span>
+          <span className="font-semibold text-slate-300 flex items-center gap-1.5">
+            {scopedChurch && <Lock className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+            <span>
+              {scopedChurch
+                ? `Auto-Selected Onboarding: ${scopedChurch.name}`
+                : 'Strict Onboarding Separation:'}
+            </span>
+          </span>
           <span>
-            Google authentication verifies who you are. After sign-in, new applicants complete
-            a profile form with Date of Birth, Phone, Gender, and Village / City Name for church
-            Accountant verification before any church records are accessible.
+            {scopedChurch
+              ? `New members signing in through this link are automatically matched to ${scopedChurch.name} and verified by the church Accountant before accessing records.`
+              : 'Google authentication verifies who you are. After sign-in, new applicants complete a profile form with Date of Birth, Phone, Gender, and Village / City Name for church Accountant verification before any church records are accessible.'}
           </span>
         </div>
 
@@ -353,11 +428,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
                 <strong className="text-white block font-semibold mb-1">
                   2. Disable Unwanted Providers
                 </strong>
-                <p>
-                  To complete cutover to Google-only authentication:
-                </p>
+                <p>To complete cutover to Google-only authentication:</p>
                 <ul className="list-disc list-inside mt-1 space-y-0.5 text-slate-400">
-                  <li>In <strong>Authentication</strong> &rarr; <strong>Providers</strong> &rarr; <strong>Email</strong>: toggle <em>Enable Email provider</em> to <strong>OFF</strong>.</li>
+                  <li>
+                    In <strong>Authentication</strong> &rarr; <strong>Providers</strong> &rarr;{' '}
+                    <strong>Email</strong>: toggle <em>Enable Email provider</em> to <strong>OFF</strong>.
+                  </li>
                   <li>Ensure Phone and third-party passwordless providers are disabled.</li>
                 </ul>
               </div>
@@ -367,8 +443,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
                   3. Permanent Account Identification
                 </strong>
                 <p>
-                  The system uses Supabase's authenticated <code className="text-sky-300 font-mono">user.id</code> (UUID)
-                  as the immutable identifier. The Google login email is never editable by applicants or church staff.
+                  The system uses Supabase's authenticated{' '}
+                  <code className="text-sky-300 font-mono">user.id</code> (UUID) as the immutable
+                  identifier. The Google login email is never editable by applicants or church staff.
                 </p>
               </div>
             </div>
@@ -377,6 +454,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
 
         {/* Public App Home, Privacy Policy & Terms of Service Links */}
         <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[11px] text-slate-400">
+          {scopedChurch && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  clearScopedChurch();
+                  if (onNavigate) onNavigate('/');
+                }}
+                className="hover:text-sky-300 transition-colors cursor-pointer"
+              >
+                All Churches Sign-In
+              </button>
+              <span className="text-slate-700">&bull;</span>
+            </>
+          )}
           <a
             href="/home"
             onClick={(e) => {

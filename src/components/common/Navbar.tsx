@@ -12,6 +12,7 @@ import {
   X,
   Building2,
   Check,
+  Lock,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -32,6 +33,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     authorizedChurches,
     activeRole,
     isPlatformAdmin,
+    isChurchLocked,
     setActiveChurchId,
     signOut,
   } = useAuth();
@@ -103,22 +105,34 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Center: Church Switcher (strictly authorized churches only) */}
+        {/* Center: Church Switcher (locked for members via church link; admins can switch) */}
         <div className="relative">
           {authorizedChurches.length > 0 ? (
-            <div>
-              <button
-                onClick={() => setIsChurchMenuOpen(!isChurchMenuOpen)}
-                aria-haspopup="true"
-                aria-expanded={isChurchMenuOpen}
-                className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 transition-colors"
+            isChurchLocked ? (
+              <div
+                title="Locked to this congregation's specific portal link"
+                className="flex items-center gap-2 bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200"
               >
                 <Building2 className="w-4 h-4 text-sky-400 shrink-0" />
                 <span className="font-medium max-w-[140px] sm:max-w-[220px] truncate text-left">
-                  {activeChurch ? activeChurch.name : 'Select Church'}
+                  {activeChurch ? activeChurch.name : 'Assigned Church'}
                 </span>
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-              </button>
+                <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              </div>
+            ) : (
+              <div>
+                <button
+                  onClick={() => setIsChurchMenuOpen(!isChurchMenuOpen)}
+                  aria-haspopup="true"
+                  aria-expanded={isChurchMenuOpen}
+                  className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 transition-colors"
+                >
+                  <Building2 className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span className="font-medium max-w-[140px] sm:max-w-[220px] truncate text-left">
+                    {activeChurch ? activeChurch.name : 'Select Church'}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                </button>
 
               {isChurchMenuOpen && (
                 <>
@@ -160,7 +174,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                 </>
               )}
-            </div>
+              </div>
+            )
           ) : (
             <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-lg">
               Pending Church Approval

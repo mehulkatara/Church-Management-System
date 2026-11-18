@@ -1,8 +1,19 @@
-import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase, supabaseConfig, parseOAuthCallback, parseTokenString } from '../lib/supabase';
-import type { Church, Profile, ChurchAccess, AccessRequest, UserRole, Gender } from '../types/database';
-import { getHighestChurchRole } from '../lib/domain-logic';
+import type { Church, Profile, ChurchAccess, AccessRequest, UserRole } from '../types/database';
+import {
+  getHighestChurchRole,
+  extractChurchSlugFromPath,
+  buildChurchPortalUrl,
+} from '../lib/domain-logic';
+import {
+  DEFAULT_PREVIEW_CHURCHES,
+  resolveActiveChurchBySlug,
+  persistScopedChurchSlug,
+  consumeOAuthScopedChurchSlug,
+  SCOPED_CHURCH_SLUG_SESSION_KEY,
+} from '../lib/church-slug';
 
 interface AuthContextType {
   user: User | null;
@@ -11,6 +22,9 @@ interface AuthContextType {
   isPlatformAdmin: boolean;
   authorizedChurches: Church[];
   activeChurch: Church | null;
+  scopedChurch: Church | null;
+  isScopedChurchLoading: boolean;
+  isChurchLocked: boolean;
   activeRole: UserRole | 'none';
   churchAccessList: ChurchAccess[];
   pendingRequests: AccessRequest[];
@@ -20,28 +34,28 @@ interface AuthContextType {
   isLoading: boolean;
   error: string | null;
   setActiveChurchId: (churchId: string) => void;
+  updateScopedChurchInState: (church: Church) => void;
+  clearScopedChurch: () => void;
   refreshUserData: () => Promise<void>;
   signOut: () => Promise<void>;
   loginAsPersona: (persona: string) => void;
   authenticateWithToken: (tokenOrUrl: string) => boolean;
 }
 
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const SAMPLE_CHURCH: Church = {
-  id: 'c1111111-1111-1111-1111-111111111111',
-  code: 'BETHEL',
-  name: 'Bethel Christian Assembly',
-  address: '14 Anna Salai, Chennai',
-  phone: '+91 44 2811 0000',
-  email: 'admin@bethel.org',
-  is_active: true,
-  created_at: '2026-01-01T00:00:00Z',
-  updated_at: '2026-01-01T00:00:00Z',
-};
+const SAMPLE_CHURCH: Church = DEFAULT_PREVIEW_CHURCHES[0];
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+function isChurchPathPrefix(pathname: string): boolean {
+  const clean = (pathname || '').replace(/\/+$/, '');
+  return clean === '/c' || clean.startsWith('/c/');
+}
+
+export const AuthProvider: React.FC<{
+  children: React.ReactNode;
+  pathname?: string;
+  onReplacePath?: (path: string) => void;
+}> = ({ children, pathname = '/', onReplacePath }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -49,285 +63,369 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [churchAccessList, setChurchAccessList] = useState<ChurchAccess[]>([]);
   const [authorizedChurches, setAuthorizedChurches] = useState<Church[]>([]);
   const [activeChurch, setActiveChurch] = useState<Church | null>(null);
+  const [scopedChurch, setScopedChurch] = useState<Church | null>(null);
+  const [isScopedChurchLoading, setIsScopedChurchLoading] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      isChurchPathPrefix(window.location.pathname) ||
+      Boolean(window.sessionStorage.getItem(SCOPED_CHURCH_SLUG_SESSION_KEY))
+    );
+  });
   const [userRequests, setUserRequests] = useState<AccessRequest[]>([]);
   const [googleProviderToken, setGoogleProviderToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Resolve church scope from /c/<slug> URL or persisted OAuth/session handoff
+  useEffect(() => {
+    let isCancelled = false;
+
+    const resolveScope = async () => {
+      const currentPath =
+        pathname || (typeof window !== 'undefined' ? window.location.pathname : '/');
+      const isExplicitChurchRoute = isChurchPathPrefix(currentPath);
+      const pathSlug = extractChurchSlugFromPath(currentPath);
+
+      if (isExplicitChurchRoute && !pathSlug) {
+        // Malformed /c/ or invalid slug format -> silently redirect to standard login
+        persistScopedChurchSlug(null);
+        if (!isCancelled) {
+          setScopedChurch(null);
+          setIsScopedChurchLoading(false);
+          if (onReplacePath) onReplacePath('/');
+        }
+        return;
+      }
+
+      const fallbackSlug = !isExplicitChurchRoute ? consumeOAuthScopedChurchSlug() : null;
+      const targetSlug = pathSlug || fallbackSlug;
+
+      if (!targetSlug) {
+        if (!isCancelled) {
+          setScopedChurch(null);
+          setIsScopedChurchLoading(false);
+        }
+        return;
+      }
+
+      if (!isCancelled) setIsScopedChurchLoading(true);
+      const resolved = await resolveActiveChurchBySlug(targetSlug);
+
+      if (isCancelled) return;
+
+      if (resolved) {
+        persistScopedChurchSlug(resolved.slug, false);
+        setScopedChurch(resolved);
+        // Restore canonical /c/<slug> path if returned to "/" after OAuth redirect
+        if (!isExplicitChurchRoute && onReplacePath && currentPath === '/') {
+          onReplacePath(`/c/${resolved.slug}`);
+        }
+      } else {
+        // Unrecognized or inactive church slug -> silently redirect to standard multi-church login
+        persistScopedChurchSlug(null);
+        setScopedChurch(null);
+        if (isExplicitChurchRoute && onReplacePath) {
+          onReplacePath('/');
+        }
+      }
+
+      setIsScopedChurchLoading(false);
+    };
+
+    resolveScope();
+    return () => {
+      isCancelled = true;
+    };
+  }, [pathname, onReplacePath]);
+
   // Setup synthetic persona for preview mode if selected in sessionStorage
-  const applyPersona = (persona: string): boolean => {
-    const baseDate = new Date().toISOString();
+  const applyPersona = useCallback(
+    (persona: string, targetChurchOverride?: Church | null): boolean => {
+      const baseDate = new Date().toISOString();
+      const targetChurch = targetChurchOverride ?? scopedChurch ?? SAMPLE_CHURCH;
 
-    if (persona === 'applicant_new') {
-      const mockUser = {
-        id: 'u-app-new-1234',
-        email: 'applicant.new@gmail.com',
-        user_metadata: { full_name: 'Abraham Lincoln Raj' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: mockUser.email || '',
-        full_name: 'Abraham Lincoln Raj',
-        phone: null,
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(false);
-      setChurchAccessList([]);
-      setAuthorizedChurches([]);
-      setActiveChurch(null);
-      setUserRequests([]);
-      setIsLoading(false);
-      return true;
-    }
+      if (persona === 'applicant_new') {
+        const mockUser = {
+          id: 'u-app-new-1234',
+          email: 'applicant.new@gmail.com',
+          user_metadata: { full_name: 'Abraham Lincoln Raj' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: mockUser.email || '',
+          full_name: 'Abraham Lincoln Raj',
+          phone: null,
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(false);
+        setChurchAccessList([]);
+        setAuthorizedChurches([]);
+        setActiveChurch(null);
+        setUserRequests([]);
+        setIsLoading(false);
+        return true;
+      }
 
-    if (persona === 'applicant_draft') {
-      const mockUser = {
-        id: 'u-app-draft-5678',
-        email: 'draft.applicant@gmail.com',
-        user_metadata: { full_name: 'John Peter' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: mockUser.email || '',
-        full_name: 'John Peter',
-        phone: '+919840123456',
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(false);
-      setChurchAccessList([]);
-      setAuthorizedChurches([]);
-      setActiveChurch(null);
-      setUserRequests([
-        {
-          id: 'req-draft-1',
-          church_id: SAMPLE_CHURCH.id,
+      if (persona === 'applicant_draft') {
+        const mockUser = {
+          id: 'u-app-draft-5678',
+          email: 'draft.applicant@gmail.com',
+          user_metadata: { full_name: 'John Peter' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: mockUser.email || '',
+          full_name: 'John Peter',
+          phone: '+919840123456',
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(false);
+        setChurchAccessList([]);
+        setAuthorizedChurches([]);
+        setActiveChurch(null);
+        setUserRequests([
+          {
+            id: 'req-draft-1',
+            church_id: targetChurch.id,
+            user_id: mockUser.id,
+            applicant_name: 'John Peter',
+            applicant_email: 'draft.applicant@gmail.com',
+            applicant_phone: '+919840123456',
+            date_of_birth: '1994-06-15',
+            gender: 'male',
+            village_name: 'Tambaram',
+            submission_version: 1,
+            is_draft: true,
+            status: 'draft',
+            requested_at: baseDate,
+            decided_at: null,
+            decided_by: null,
+            decision_reason: null,
+            linked_member_id: null,
+            church: targetChurch,
+          },
+        ]);
+        setIsLoading(false);
+        return true;
+      }
+
+      if (persona === 'applicant_returned') {
+        const mockUser = {
+          id: 'u-app-ret-9999',
+          email: 'applicant.returned@gmail.com',
+          user_metadata: { full_name: 'Stephen Joseph' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: mockUser.email || '',
+          full_name: 'Stephen Joseph',
+          phone: '+919840999999',
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(false);
+        setChurchAccessList([]);
+        setAuthorizedChurches([]);
+        setActiveChurch(null);
+        setUserRequests([
+          {
+            id: 'req-returned-1',
+            church_id: targetChurch.id,
+            user_id: mockUser.id,
+            applicant_name: 'Stephen Joseph',
+            applicant_email: 'applicant.returned@gmail.com',
+            applicant_phone: '+919840999999',
+            date_of_birth: '1992-11-04',
+            gender: 'male',
+            village_name: 'Kallakurichi',
+            submission_version: 2,
+            is_draft: false,
+            status: 'returned_for_correction',
+            requested_at: baseDate,
+            decided_at: baseDate,
+            decided_by: 'accountant-uuid',
+            decision_reason:
+              'Please verify your date of birth against your Aadhaar/church baptism record (year appears to be 1993, not 1992).',
+            linked_member_id: null,
+            church: targetChurch,
+          },
+        ]);
+        setIsLoading(false);
+        return true;
+      }
+
+      if (persona === 'applicant_pending') {
+        const mockUser = {
+          id: 'u-app-pend-7777',
+          email: 'applicant.pending@gmail.com',
+          user_metadata: { full_name: 'Mary Magdalene' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: mockUser.email || '',
+          full_name: 'Mary Magdalene',
+          phone: '+919884111222',
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(false);
+        setChurchAccessList([]);
+        setAuthorizedChurches([]);
+        setActiveChurch(null);
+        setUserRequests([
+          {
+            id: 'req-pending-1',
+            church_id: targetChurch.id,
+            user_id: mockUser.id,
+            applicant_name: 'Mary Magdalene',
+            applicant_email: 'applicant.pending@gmail.com',
+            applicant_phone: '+919884111222',
+            date_of_birth: '1996-08-19',
+            gender: 'female',
+            village_name: 'Guindy',
+            submission_version: 1,
+            is_draft: false,
+            status: 'pending',
+            requested_at: baseDate,
+            decided_at: null,
+            decided_by: null,
+            decision_reason: null,
+            linked_member_id: null,
+            church: targetChurch,
+          },
+        ]);
+        setIsLoading(false);
+        return true;
+      }
+
+      if (persona === 'accountant') {
+        const mockUser = {
+          id: 'u-accountant-001',
+          email: 'accountant@bethel.org',
+          user_metadata: { full_name: 'Grace Thomas (Accountant)' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: 'accountant@bethel.org',
+          full_name: 'Grace Thomas (Accountant)',
+          phone: '+919840000001',
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(false);
+        const access: ChurchAccess = {
+          id: 'acc-1',
+          church_id: targetChurch.id,
           user_id: mockUser.id,
-          applicant_name: 'John Peter',
-          applicant_email: 'draft.applicant@gmail.com',
-          applicant_phone: '+919840123456',
-          date_of_birth: '1994-06-15',
-          gender: 'male',
-          village_name: 'Tambaram',
-          submission_version: 1,
-          is_draft: true,
-          status: 'draft',
-          requested_at: baseDate,
-          decided_at: null,
-          decided_by: null,
-          decision_reason: null,
-          linked_member_id: null,
-          church: SAMPLE_CHURCH,
-        },
-      ]);
-      setIsLoading(false);
-      return true;
-    }
+          role: 'accountant',
+          status: 'approved',
+          granted_at: baseDate,
+          granted_by: 'admin',
+          notes: 'Assigned Church Accountant',
+          church: targetChurch,
+        };
+        setChurchAccessList([access]);
+        setAuthorizedChurches([targetChurch]);
+        setActiveChurch(targetChurch);
+        setUserRequests([]);
+        setIsLoading(false);
+        return true;
+      }
 
-    if (persona === 'applicant_returned') {
-      const mockUser = {
-        id: 'u-app-ret-9999',
-        email: 'applicant.returned@gmail.com',
-        user_metadata: { full_name: 'Stephen Joseph' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: mockUser.email || '',
-        full_name: 'Stephen Joseph',
-        phone: '+919840999999',
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(false);
-      setChurchAccessList([]);
-      setAuthorizedChurches([]);
-      setActiveChurch(null);
-      setUserRequests([
-        {
-          id: 'req-returned-1',
-          church_id: SAMPLE_CHURCH.id,
+      if (persona === 'member') {
+        const mockUser = {
+          id: 'u-member-002',
+          email: 'member@bethel.org',
+          user_metadata: { full_name: 'David Paul (Member)' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: 'member@bethel.org',
+          full_name: 'David Paul (Member)',
+          phone: '+919840000002',
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(false);
+        const allDemoChurches = DEFAULT_PREVIEW_CHURCHES;
+        const accessList: ChurchAccess[] = allDemoChurches.map((ch, idx) => ({
+          id: `acc-member-${idx + 1}`,
+          church_id: ch.id,
           user_id: mockUser.id,
-          applicant_name: 'Stephen Joseph',
-          applicant_email: 'applicant.returned@gmail.com',
-          applicant_phone: '+919840999999',
-          date_of_birth: '1992-11-04',
-          gender: 'male',
-          village_name: 'Kallakurichi',
-          submission_version: 2,
-          is_draft: false,
-          status: 'returned_for_correction',
-          requested_at: baseDate,
-          decided_at: baseDate,
-          decided_by: 'accountant-uuid',
-          decision_reason:
-            'Please verify your date of birth against your Aadhaar/church baptism record (year appears to be 1993, not 1992).',
-          linked_member_id: null,
-          church: SAMPLE_CHURCH,
-        },
-      ]);
-      setIsLoading(false);
-      return true;
-    }
+          role: 'member',
+          status: 'approved',
+          granted_at: baseDate,
+          granted_by: 'accountant',
+          notes: 'Verified Member',
+          church: ch,
+        }));
+        setChurchAccessList(accessList);
+        setAuthorizedChurches(allDemoChurches);
+        setActiveChurch(targetChurch);
+        setUserRequests([]);
+        setIsLoading(false);
+        return true;
+      }
 
-    if (persona === 'applicant_pending') {
-      const mockUser = {
-        id: 'u-app-pend-7777',
-        email: 'applicant.pending@gmail.com',
-        user_metadata: { full_name: 'Mary Magdalene' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: mockUser.email || '',
-        full_name: 'Mary Magdalene',
-        phone: '+919884111222',
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(false);
-      setChurchAccessList([]);
-      setAuthorizedChurches([]);
-      setActiveChurch(null);
-      setUserRequests([
-        {
-          id: 'req-pending-1',
-          church_id: SAMPLE_CHURCH.id,
-          user_id: mockUser.id,
-          applicant_name: 'Mary Magdalene',
-          applicant_email: 'applicant.pending@gmail.com',
-          applicant_phone: '+919884111222',
-          date_of_birth: '1996-08-19',
-          gender: 'female',
-          village_name: 'Guindy',
-          submission_version: 1,
-          is_draft: false,
-          status: 'pending',
-          requested_at: baseDate,
-          decided_at: null,
-          decided_by: null,
-          decision_reason: null,
-          linked_member_id: null,
-          church: SAMPLE_CHURCH,
-        },
-      ]);
-      setIsLoading(false);
-      return true;
-    }
+      if (persona === 'admin') {
+        const mockUser = {
+          id: 'u-admin-003',
+          email: 'admin@bethel.org',
+          user_metadata: { full_name: 'Platform Administrator' },
+          created_at: baseDate,
+          app_metadata: { provider: 'google' },
+        } as unknown as User;
+        setUser(mockUser);
+        setProfile({
+          id: mockUser.id,
+          email: 'admin@bethel.org',
+          full_name: 'Platform Administrator',
+          phone: '+919840000003',
+          created_at: baseDate,
+          updated_at: baseDate,
+        });
+        setIsPlatformAdmin(true);
+        setChurchAccessList([]);
+        setAuthorizedChurches(DEFAULT_PREVIEW_CHURCHES);
+        setActiveChurch(targetChurch);
+        setUserRequests([]);
+        setIsLoading(false);
+        return true;
+      }
 
-    if (persona === 'accountant') {
-      const mockUser = {
-        id: 'u-accountant-001',
-        email: 'accountant@bethel.org',
-        user_metadata: { full_name: 'Grace Thomas (Accountant)' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: 'accountant@bethel.org',
-        full_name: 'Grace Thomas (Accountant)',
-        phone: '+919840000001',
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(false);
-      const access: ChurchAccess = {
-        id: 'acc-1',
-        church_id: SAMPLE_CHURCH.id,
-        user_id: mockUser.id,
-        role: 'accountant',
-        status: 'approved',
-        granted_at: baseDate,
-        granted_by: 'admin',
-        notes: 'Assigned Church Accountant',
-        church: SAMPLE_CHURCH,
-      };
-      setChurchAccessList([access]);
-      setAuthorizedChurches([SAMPLE_CHURCH]);
-      setActiveChurch(SAMPLE_CHURCH);
-      setUserRequests([]);
-      setIsLoading(false);
-      return true;
-    }
+      return false;
+    },
+    [scopedChurch]
+  );
 
-    if (persona === 'member') {
-      const mockUser = {
-        id: 'u-member-002',
-        email: 'member@bethel.org',
-        user_metadata: { full_name: 'David Paul (Member)' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: 'member@bethel.org',
-        full_name: 'David Paul (Member)',
-        phone: '+919840000002',
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(false);
-      const access: ChurchAccess = {
-        id: 'acc-2',
-        church_id: SAMPLE_CHURCH.id,
-        user_id: mockUser.id,
-        role: 'member',
-        status: 'approved',
-        granted_at: baseDate,
-        granted_by: 'accountant',
-        notes: 'Verified Member',
-        church: SAMPLE_CHURCH,
-      };
-      setChurchAccessList([access]);
-      setAuthorizedChurches([SAMPLE_CHURCH]);
-      setActiveChurch(SAMPLE_CHURCH);
-      setUserRequests([]);
-      setIsLoading(false);
-      return true;
+  // Keep activeChurch synced to scopedChurch whenever scopedChurch resolves for an authenticated session
+  useEffect(() => {
+    if (!scopedChurch || !user) return;
+    const matchInAuthorized = authorizedChurches.find((c) => c.id === scopedChurch.id);
+    if (matchInAuthorized) {
+      setActiveChurch(matchInAuthorized);
     }
-
-    if (persona === 'admin') {
-      const mockUser = {
-        id: 'u-admin-003',
-        email: 'admin@bethel.org',
-        user_metadata: { full_name: 'Platform Administrator' },
-        created_at: baseDate,
-        app_metadata: { provider: 'google' },
-      } as unknown as User;
-      setUser(mockUser);
-      setProfile({
-        id: mockUser.id,
-        email: 'admin@bethel.org',
-        full_name: 'Platform Administrator',
-        phone: '+919840000003',
-        created_at: baseDate,
-        updated_at: baseDate,
-      });
-      setIsPlatformAdmin(true);
-      setChurchAccessList([]);
-      setAuthorizedChurches([SAMPLE_CHURCH]);
-      setActiveChurch(SAMPLE_CHURCH);
-      setUserRequests([]);
-      setIsLoading(false);
-      return true;
-    }
-
-    return false;
-  };
+  }, [scopedChurch, authorizedChurches, user]);
 
   const fetchUserData = async (currentUser: User) => {
     // If a preview persona is stored, apply it directly
@@ -430,8 +528,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .order('name');
         const churches = (allChurches || []) as Church[];
         setAuthorizedChurches(churches);
-        if (churches.length > 0 && !activeChurch) {
-          setActiveChurch(churches[0]);
+        if (churches.length > 0) {
+          const scopedMatch = scopedChurch ? churches.find((c) => c.id === scopedChurch.id) : null;
+          if (scopedMatch) {
+            setActiveChurch(scopedMatch);
+          } else if (!activeChurch) {
+            setActiveChurch(churches[0]);
+          }
         }
       } else {
         const churchesMap = new Map<string, Church>();
@@ -444,7 +547,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setAuthorizedChurches(userChurches);
 
         if (userChurches.length > 0) {
-          if (!activeChurch || !churchesMap.has(activeChurch.id)) {
+          const scopedMatch = scopedChurch ? churchesMap.get(scopedChurch.id) : null;
+          if (scopedMatch) {
+            setActiveChurch(scopedMatch);
+          } else if (!activeChurch || !churchesMap.has(activeChurch.id)) {
             setActiveChurch(userChurches[0]);
           }
         } else {
@@ -520,12 +626,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Sync session into Supabase client
       if (supabase && oauthData.accessToken) {
-        supabase.auth.setSession({
-          access_token: oauthData.accessToken,
-          refresh_token: oauthData.refreshToken || '',
-        }).catch((err) => {
-          console.warn('Supabase setSession notice:', err);
-        });
+        supabase.auth
+          .setSession({
+            access_token: oauthData.accessToken,
+            refresh_token: oauthData.refreshToken || '',
+          })
+          .catch((err) => {
+            console.warn('Supabase setSession notice:', err);
+          });
       }
 
       if (oauthData.providerToken) {
@@ -600,12 +708,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
+  // Compute active role strictly from database assignment using role precedence
+  const activeRole = useMemo<UserRole | 'none'>(() => {
+    if (isPlatformAdmin) return 'platform_admin';
+    if (!activeChurch) return 'none';
+
+    const approvedRoles = churchAccessList
+      .filter((a) => a.church_id === activeChurch.id && a.status === 'approved')
+      .map((a) => a.role);
+
+    return getHighestChurchRole(approvedRoles);
+  }, [isPlatformAdmin, activeChurch, churchAccessList]);
+
+  // Lock church switching when scoped via /c/<slug> during onboarding or for non-admin users (members, etc.); admins can switch
+  const isChurchLocked = useMemo<boolean>(() => {
+    if (!scopedChurch) return false;
+    if (isPlatformAdmin || activeRole === 'admin') return false;
+    return true;
+  }, [scopedChurch, isPlatformAdmin, activeRole]);
+
   const setActiveChurchId = (churchId: string) => {
+    if (isChurchLocked && scopedChurch && churchId !== scopedChurch.id) {
+      return;
+    }
     const target = authorizedChurches.find((c) => c.id === churchId);
     if (target) {
       setActiveChurch(target);
     }
   };
+
+  const updateScopedChurchInState = useCallback(
+    (updatedChurch: Church) => {
+      setAuthorizedChurches((prev) =>
+        prev.map((c) => (c.id === updatedChurch.id ? updatedChurch : c))
+      );
+      if (scopedChurch && scopedChurch.id === updatedChurch.id) {
+        setScopedChurch(updatedChurch);
+        persistScopedChurchSlug(updatedChurch.slug, false);
+        if (onReplacePath && isChurchPathPrefix(pathname)) {
+          onReplacePath(`/c/${updatedChurch.slug}`);
+        }
+      }
+      if (activeChurch && activeChurch.id === updatedChurch.id) {
+        setActiveChurch(updatedChurch);
+      }
+    },
+    [scopedChurch, activeChurch, onReplacePath, pathname]
+  );
+
+  const clearScopedChurch = useCallback(() => {
+    persistScopedChurchSlug(null);
+    setScopedChurch(null);
+    if (onReplacePath && isChurchPathPrefix(pathname)) {
+      onReplacePath('/');
+    }
+  }, [onReplacePath, pathname]);
 
   const refreshUserData = async () => {
     if (user) {
@@ -618,6 +775,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       localStorage.removeItem('cms_oauth_user');
       localStorage.removeItem('cms_oauth_session');
+      localStorage.removeItem('cms_oauth_scoped_church_slug');
     } catch {
       // ignore
     }
@@ -636,11 +794,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setChurchAccessList([]);
     setAuthorizedChurches([]);
     setUserRequests([]);
+
+    // Keep user on /c/<slug> branded login page if they signed out from a church link
+    if (scopedChurch && onReplacePath) {
+      persistScopedChurchSlug(scopedChurch.slug, false);
+      onReplacePath(`/c/${scopedChurch.slug}`);
+    }
   };
 
-  // Active request is the most recent pending, draft, or returned_for_correction request
+  // Active request: prefer matching scopedChurch when entered via church-specific link
   const activeRequest = useMemo<AccessRequest | null>(() => {
     if (userRequests.length === 0) return null;
+    if (scopedChurch) {
+      const scopedReqs = userRequests.filter((r) => r.church_id === scopedChurch.id);
+      if (scopedReqs.length === 0) return null;
+      const prioritized = scopedReqs.find(
+        (r) =>
+          r.status === 'returned_for_correction' ||
+          r.status === 'pending' ||
+          r.status === 'draft'
+      );
+      return prioritized || scopedReqs[0];
+    }
     const prioritized = userRequests.find(
       (r) =>
         r.status === 'returned_for_correction' ||
@@ -648,24 +823,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         r.status === 'draft'
     );
     return prioritized || userRequests[0];
-  }, [userRequests]);
+  }, [userRequests, scopedChurch]);
 
   // Backward compatibility for components consuming pendingRequests
   const pendingRequests = useMemo(() => {
     return userRequests.filter((r) => r.status === 'pending');
   }, [userRequests]);
-
-  // Compute active role strictly from database assignment using role precedence
-  const activeRole = useMemo<UserRole | 'none'>(() => {
-    if (isPlatformAdmin) return 'platform_admin';
-    if (!activeChurch) return 'none';
-
-    const approvedRoles = churchAccessList
-      .filter((a) => a.church_id === activeChurch.id && a.status === 'approved')
-      .map((a) => a.role);
-
-    return getHighestChurchRole(approvedRoles);
-  }, [isPlatformAdmin, activeChurch, churchAccessList]);
 
   const loginAsPersona = (persona: string) => {
     window.sessionStorage.setItem('cms_preview_persona', persona);
@@ -718,12 +881,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     if (supabase && oauthData.accessToken) {
-      supabase.auth.setSession({
-        access_token: oauthData.accessToken,
-        refresh_token: oauthData.refreshToken || '',
-      }).catch((err) => {
-        console.warn('Supabase setSession notice:', err);
-      });
+      supabase.auth
+        .setSession({
+          access_token: oauthData.accessToken,
+          refresh_token: oauthData.refreshToken || '',
+        })
+        .catch((err) => {
+          console.warn('Supabase setSession notice:', err);
+        });
     }
 
     if (oauthData.providerToken) {
@@ -744,6 +909,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isPlatformAdmin,
         authorizedChurches,
         activeChurch,
+        scopedChurch,
+        isScopedChurchLoading,
+        isChurchLocked,
         activeRole,
         churchAccessList,
         pendingRequests,
@@ -753,6 +921,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLoading,
         error,
         setActiveChurchId,
+        updateScopedChurchInState,
+        clearScopedChurch,
         refreshUserData,
         signOut,
         loginAsPersona,
@@ -771,3 +941,5 @@ export const useAuth = () => {
   }
   return context;
 };
+
+export { buildChurchPortalUrl };

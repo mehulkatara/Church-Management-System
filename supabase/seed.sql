@@ -5,10 +5,10 @@
 -- ==============================================================================
 
 -- 1. Insert Fictional Churches
-INSERT INTO public.churches (id, code, name, address, phone, email, is_active)
+INSERT INTO public.churches (id, code, slug, name, address, phone, email, is_active)
 VALUES 
-  ('a1000000-0000-0000-0000-000000000001', 'GBC-CHN', 'Grace Bethel Church, Chennai', '45 Anna Salai, Chennai, Tamil Nadu 600002', '+91 98400 11223', 'office@gracebethel-chennai.org', true),
-  ('a2000000-0000-0000-0000-000000000002', 'SMC-BLR', 'St. Mark Community Church, Bengaluru', '12 Richmond Road, Bengaluru, Karnataka 560025', '+91 98800 44556', 'info@stmarks-blr.org', true)
+  ('a1000000-0000-0000-0000-000000000001', 'GBC-CHN', 'grace-bethel', 'Grace Bethel Church, Chennai', '45 Anna Salai, Chennai, Tamil Nadu 600002', '+91 98400 11223', 'office@gracebethel-chennai.org', true),
+  ('a2000000-0000-0000-0000-000000000002', 'SMC-BLR', 'st-marks-blr', 'St. Mark Community Church, Bengaluru', '12 Richmond Road, Bengaluru, Karnataka 560025', '+91 98800 44556', 'info@stmarks-blr.org', true)
 ON CONFLICT (id) DO NOTHING;
 
 -- 2. Insert Standard Donation Categories for Church 1

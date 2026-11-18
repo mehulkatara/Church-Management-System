@@ -475,6 +475,11 @@ test('Accountant can assign and toggle Collector access while role precedence el
 import {
   buildMemberPortalUrl,
   buildMemberShareWhatsAppUrl,
+  normalizeChurchSlugInput,
+  suggestChurchSlug,
+  validateChurchSlug,
+  extractChurchSlugFromPath,
+  buildChurchPortalUrl,
 } from './domain-logic';
 
 test('All church staff including Collector can manage single-use member share links; Member cannot', () => {
@@ -506,4 +511,27 @@ test('Member portal URL and WhatsApp link builder behave consistently', () => {
     portalUrl: url,
   });
   assert.match(waNoPhone, /^https:\/\/wa\.me\/\?text=/);
+});
+
+test('Church URL slug normalization, validation, path parsing, and portal URL generation work accurately', () => {
+  assert.equal(normalizeChurchSlugInput('  Grace Bethel -- Chennai '), 'grace-bethel-chennai-');
+  assert.equal(suggestChurchSlug('  Grace Bethel, Chennai! '), 'grace-bethel-chennai');
+  assert.equal(suggestChurchSlug('GBC_CHN'), 'gbc-chn');
+
+  const validSlug = validateChurchSlug('grace-bethel');
+  assert.equal(validSlug.valid, true);
+  assert.equal(validSlug.normalized, 'grace-bethel');
+
+  assert.equal(validateChurchSlug('a').valid, false);
+  assert.equal(validateChurchSlug('member-portal').valid, false);
+
+  assert.equal(extractChurchSlugFromPath('/c/grace-bethel'), 'grace-bethel');
+  assert.equal(extractChurchSlugFromPath('/c/Grace-Bethel/'), 'grace-bethel');
+  assert.equal(extractChurchSlugFromPath('/home'), null);
+  assert.equal(extractChurchSlugFromPath('/c/a'), null);
+
+  assert.equal(
+    buildChurchPortalUrl('https://church.example.com/', 'Grace Bethel'),
+    'https://church.example.com/c/grace-bethel'
+  );
 });

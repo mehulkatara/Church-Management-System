@@ -15,6 +15,7 @@ export type SmsJobStatus = 'not_configured' | 'queued' | 'submitted' | 'delivere
 export interface Church {
   id: string;
   code: string;
+  slug: string;
   name: string;
   address: string | null;
   phone: string | null;

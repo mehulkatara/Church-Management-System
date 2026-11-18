@@ -2,25 +2,60 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import type { Church } from '../../types/database';
-import { buildAutoReceiptPrefix } from '../../lib/domain-logic';
+import {
+  buildAutoReceiptPrefix,
+  buildChurchPortalUrl,
+  normalizeChurchSlugInput,
+  suggestChurchSlug,
+  validateChurchSlug,
+} from '../../lib/domain-logic';
+import {
+  getPreviewChurches,
+  savePreviewChurches,
+  checkChurchSlugAvailability,
+} from '../../lib/church-slug';
 import { Modal } from '../common/Modals';
-import { Building2, Plus, Phone, Mail, MapPin } from 'lucide-react';
+import {
+  Building2,
+  Plus,
+  Phone,
+  Mail,
+  MapPin,
+  Link2,
+  Copy,
+  Check,
+  Edit3,
+} from 'lucide-react';
 
 export const ChurchManagementScreen: React.FC = () => {
-  const { authorizedChurches, refreshUserData } = useAuth();
+  const { refreshUserData, updateScopedChurchInState } = useAuth();
 
   const [churches, setChurches] = useState<Church[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [code, setCode] = useState('');
+  const [slug, setSlug] = useState('');
+  const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copiedChurchId, setCopiedChurchId] = useState<string | null>(null);
+
+  // Edit Slug Modal State
+  const [editingChurch, setEditingChurch] = useState<Church | null>(null);
+  const [editSlugValue, setEditSlugValue] = useState('');
+  const [editSlugError, setEditSlugError] = useState<string | null>(null);
+  const [isSavingEditSlug, setIsSavingEditSlug] = useState(false);
+
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
   const fetchChurches = async () => {
-    if (!supabase) return;
+    if (!supabase) {
+      setChurches(getPreviewChurches());
+      return;
+    }
     const { data } = await supabase.from('churches').select('*').order('name');
     if (data) setChurches(data as Church[]);
   };
@@ -29,36 +64,150 @@ export const ChurchManagementScreen: React.FC = () => {
     fetchChurches();
   }, []);
 
+  const handleCopyChurchLink = async (church: Church) => {
+    const url = buildChurchPortalUrl(origin, church.slug);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedChurchId(church.id);
+      setTimeout(() => {
+        setCopiedChurchId((prev) => (prev === church.id ? null : prev));
+      }, 2000);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
   const handleCreateChurch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase) return;
     setIsSubmitting(true);
     setErrorMsg(null);
 
     try {
-      const { data, error } = await supabase.from('churches').insert({
-        code: code.trim().toUpperCase(),
-        name: name.trim(),
-        address: address.trim() || null,
-        phone: phone.trim() || null,
-        email: email.trim() || null,
-        is_active: true,
-      }).select().single();
+      const slugCheck = validateChurchSlug(slug || suggestChurchSlug(name || code));
+      if (!slugCheck.valid) {
+        setErrorMsg(slugCheck.error || 'Please enter a valid URL slug.');
+        setIsSubmitting(false);
+        return;
+      }
 
-      if (error) throw error;
+      const availability = await checkChurchSlugAvailability(slugCheck.normalized, null);
+      if (!availability.available) {
+        setErrorMsg(availability.reason || 'This URL slug is already in use.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!supabase) {
+        const cleanCode = code.trim().toUpperCase();
+        const existing = getPreviewChurches();
+        if (existing.some((c) => c.code.toUpperCase() === cleanCode)) {
+          throw new Error(`Church code "${cleanCode}" already exists.`);
+        }
+        const now = new Date().toISOString();
+        const newChurch: Church = {
+          id: `c-${Date.now()}`,
+          code: cleanCode,
+          slug: availability.normalizedSlug,
+          name: name.trim(),
+          address: address.trim() || null,
+          phone: phone.trim() || null,
+          email: email.trim() || null,
+          is_active: true,
+          created_at: now,
+          updated_at: now,
+        };
+        const updatedList = [...existing, newChurch];
+        savePreviewChurches(updatedList);
+        setChurches(updatedList);
+      } else {
+        const { error } = await supabase
+          .from('churches')
+          .insert({
+            code: code.trim().toUpperCase(),
+            slug: availability.normalizedSlug,
+            name: name.trim(),
+            address: address.trim() || null,
+            phone: phone.trim() || null,
+            email: email.trim() || null,
+            is_active: true,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        await fetchChurches();
+        await refreshUserData();
+      }
 
       setIsModalOpen(false);
       setCode('');
+      setSlug('');
+      setSlugManuallyEdited(false);
       setName('');
       setAddress('');
       setPhone('');
       setEmail('');
-      await fetchChurches();
-      await refreshUserData();
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to create church.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleSaveEditedSlug = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingChurch) return;
+
+    setIsSavingEditSlug(true);
+    setEditSlugError(null);
+
+    try {
+      const validation = validateChurchSlug(editSlugValue);
+      if (!validation.valid) {
+        setEditSlugError(validation.error || 'Invalid URL slug.');
+        setIsSavingEditSlug(false);
+        return;
+      }
+
+      const availability = await checkChurchSlugAvailability(
+        validation.normalized,
+        editingChurch.id
+      );
+      if (!availability.available) {
+        setEditSlugError(availability.reason || 'This URL slug is already in use.');
+        setIsSavingEditSlug(false);
+        return;
+      }
+
+      if (!supabase) {
+        const updatedList = getPreviewChurches().map((c) =>
+          c.id === editingChurch.id
+            ? { ...c, slug: availability.normalizedSlug, updated_at: new Date().toISOString() }
+            : c
+        );
+        savePreviewChurches(updatedList);
+        setChurches(updatedList);
+        const updatedTarget = updatedList.find((c) => c.id === editingChurch.id);
+        if (updatedTarget) updateScopedChurchInState(updatedTarget);
+      } else {
+        const { data, error } = await supabase
+          .from('churches')
+          .update({ slug: availability.normalizedSlug })
+          .eq('id', editingChurch.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        if (data) updateScopedChurchInState(data as Church);
+        await fetchChurches();
+        await refreshUserData();
+      }
+
+      setEditingChurch(null);
+    } catch (err: unknown) {
+      setEditSlugError(err instanceof Error ? err.message : 'Failed to update church URL slug.');
+    } finally {
+      setIsSavingEditSlug(false);
     }
   };
 
@@ -71,13 +220,15 @@ export const ChurchManagementScreen: React.FC = () => {
             <span>Multi-Church Administration</span>
           </h1>
           <p className="text-xs text-slate-400">
-            Create and maintain isolated churches on the platform
+            Create churches and manage their dedicated sign-in URLs
           </p>
         </div>
 
         <button
           onClick={() => {
             setErrorMsg(null);
+            setSlugManuallyEdited(false);
+            setSlug('');
             setIsModalOpen(true);
           }}
           className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer"
@@ -88,58 +239,98 @@ export const ChurchManagementScreen: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {churches.map((church) => (
-          <div
-            key={church.id}
-            className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-xl"
-          >
-            <div className="flex items-start justify-between">
-              <div>
-                <span className="text-[11px] font-mono text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20 uppercase font-semibold">
-                  Code: {church.code}
+        {churches.map((church) => {
+          const isCopied = copiedChurchId === church.id;
+          return (
+            <div
+              key={church.id}
+              className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-xl"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-mono text-sky-400 uppercase font-semibold">
+                    Code: {church.code}
+                  </div>
+                  <h3 className="text-base font-bold text-white mt-0.5">{church.name}</h3>
+                </div>
+                <span
+                  className={`text-[11px] font-mono font-semibold shrink-0 ${
+                    church.is_active ? 'text-emerald-400' : 'text-slate-400'
+                  }`}
+                >
+                  {church.is_active ? 'Active' : 'Inactive'}
                 </span>
-                <h3 className="text-base font-bold text-white mt-1.5">{church.name}</h3>
               </div>
-              <span
-                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
-                  church.is_active
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
-              >
-                {church.is_active ? 'ACTIVE' : 'INACTIVE'}
-              </span>
-            </div>
 
-            <div className="space-y-1 text-xs text-slate-400 pt-1 border-t border-slate-800/80">
-              {church.address && (
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>{church.address}</span>
-                </div>
-              )}
-              {church.phone && (
-                <div className="flex items-center gap-2">
-                  <Phone className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span className="font-mono">{church.phone}</span>
-                </div>
-              )}
-              {church.email && (
-                <div className="flex items-center gap-2">
-                  <Mail className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>{church.email}</span>
-                </div>
-              )}
-            </div>
+              <div className="space-y-1 text-xs text-slate-400 pt-2 border-t border-slate-800/80">
+                {church.address && (
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span>{church.address}</span>
+                  </div>
+                )}
+                {church.phone && (
+                  <div className="flex items-center gap-2">
+                    <Phone className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span className="font-mono tabular-nums">{church.phone}</span>
+                  </div>
+                )}
+                {church.email && (
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span>{church.email}</span>
+                  </div>
+                )}
+              </div>
 
-            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono">
-              <span className="text-slate-500">Auto Receipt Format:</span>
-              <span className="text-sky-300 font-semibold">
-                {buildAutoReceiptPrefix(church.code, new Date())}#
-              </span>
+              {/* Dedicated Church URL Bar */}
+              <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Link2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span>Dedicated Sign-In URL</span>
+                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditSlugValue(church.slug);
+                        setEditSlugError(null);
+                        setEditingChurch(church);
+                      }}
+                      className="text-[11px] text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-lg border border-slate-700 flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      <span>Edit Slug</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyChurchLink(church)}
+                      className="text-[11px] text-sky-300 hover:text-sky-200 bg-sky-500/10 hover:bg-sky-500/20 px-2 py-1 rounded-lg border border-sky-500/20 flex items-center gap-1 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      {isCopied ? (
+                        <Check className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                      <span>{isCopied ? 'Copied!' : 'Copy Link'}</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="px-2.5 py-1.5 bg-slate-950 border border-slate-800 rounded-lg font-mono text-[11px] text-sky-300 truncate">
+                  {buildChurchPortalUrl(origin, church.slug)}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono">
+                <span className="text-slate-500">Auto Receipt Format:</span>
+                <span className="text-sky-300 font-semibold tabular-nums">
+                  {buildAutoReceiptPrefix(church.code, new Date())}#
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* CREATE CHURCH MODAL */}
@@ -162,7 +353,13 @@ export const ChurchManagementScreen: React.FC = () => {
                 <input
                   type="text"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+                    setName(nextName);
+                    if (!slugManuallyEdited) {
+                      setSlug(suggestChurchSlug(nextName || code));
+                    }
+                  }}
                   required
                   placeholder="e.g. Grace Bethel Church"
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500"
@@ -174,12 +371,43 @@ export const ChurchManagementScreen: React.FC = () => {
                 <input
                   type="text"
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
+                  onChange={(e) => {
+                    const nextCode = e.target.value;
+                    setCode(nextCode);
+                    if (!slugManuallyEdited && !name.trim()) {
+                      setSlug(suggestChurchSlug(nextCode));
+                    }
+                  }}
                   required
                   placeholder="e.g. GBC-CHN"
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono uppercase focus:outline-none focus:border-sky-500"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">
+                Custom URL Slug <span className="text-red-400">*</span>
+              </label>
+              <div className="flex items-stretch bg-slate-950 border border-slate-700 rounded-xl overflow-hidden focus-within:border-sky-500">
+                <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-slate-400 font-mono flex items-center select-none">
+                  /c/
+                </span>
+                <input
+                  type="text"
+                  value={slug}
+                  onChange={(e) => {
+                    setSlugManuallyEdited(true);
+                    setSlug(normalizeChurchSlugInput(e.target.value));
+                  }}
+                  required
+                  placeholder="e.g. grace-bethel"
+                  className="flex-1 bg-transparent px-3 py-2 text-white font-mono focus:outline-none"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1 font-mono truncate">
+                {buildChurchPortalUrl(origin, slug || 'church-slug')}
+              </p>
             </div>
 
             <div>
@@ -229,16 +457,76 @@ export const ChurchManagementScreen: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-lg"
+                className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-lg cursor-pointer"
               >
                 {isSubmitting ? 'Creating...' : 'Create Church'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* EDIT CHURCH URL SLUG MODAL */}
+      {editingChurch && (
+        <Modal
+          isOpen={Boolean(editingChurch)}
+          onClose={() => setEditingChurch(null)}
+          title={`Edit URL Slug — ${editingChurch.name}`}
+          maxWidth="md"
+        >
+          <form onSubmit={handleSaveEditedSlug} className="space-y-4 text-xs">
+            {editSlugError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl">
+                {editSlugError}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-slate-300 font-medium mb-1">
+                Custom URL Slug <span className="text-red-400">*</span>
+              </label>
+              <div className="flex items-stretch bg-slate-950 border border-slate-700 rounded-xl overflow-hidden focus-within:border-sky-500">
+                <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-slate-400 font-mono flex items-center select-none">
+                  /c/
+                </span>
+                <input
+                  type="text"
+                  value={editSlugValue}
+                  onChange={(e) => {
+                    setEditSlugValue(normalizeChurchSlugInput(e.target.value));
+                    if (editSlugError) setEditSlugError(null);
+                  }}
+                  required
+                  placeholder="grace-bethel"
+                  className="flex-1 bg-transparent px-3 py-2 text-white font-mono focus:outline-none"
+                />
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1.5 font-mono truncate">
+                Live link: {buildChurchPortalUrl(origin, editSlugValue || editingChurch.slug)}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingChurch(null)}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingEditSlug}
+                className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-lg cursor-pointer"
+              >
+                {isSavingEditSlug ? 'Saving...' : 'Save URL Slug'}
               </button>
             </div>
           </form>

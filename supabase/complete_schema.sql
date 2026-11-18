@@ -130,6 +130,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS public.churches (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     code TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL CONSTRAINT chk_churches_slug_format CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' AND length(slug) BETWEEN 2 AND 64),
     name TEXT NOT NULL,
     address TEXT,
     phone TEXT,
@@ -138,6 +139,7 @@ CREATE TABLE IF NOT EXISTS public.churches (
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_churches_slug ON public.churches (lower(slug));
 
 -- 2. USER PROFILES (mirrors auth.users safely)
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -459,6 +461,77 @@ DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Church slug normalization trigger on insert/update
+CREATE OR REPLACE FUNCTION public.normalize_church_slug()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_source TEXT;
+BEGIN
+    v_source := COALESCE(NULLIF(trim(NEW.slug), ''), NULLIF(trim(NEW.code), ''), trim(NEW.name));
+    NEW.slug := trim(both '-' from regexp_replace(lower(COALESCE(v_source, '')), '[^a-z0-9]+', '-', 'g'));
+
+    IF TG_OP = 'UPDATE' THEN
+        NEW.updated_at := timezone('utc'::text, now());
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_normalize_church_slug ON public.churches;
+CREATE TRIGGER trg_normalize_church_slug
+    BEFORE INSERT OR UPDATE ON public.churches
+    FOR EACH ROW EXECUTE FUNCTION public.normalize_church_slug();
+
+-- Live slug availability check RPC for admins & accountants
+CREATE OR REPLACE FUNCTION public.check_church_slug_availability(
+    p_slug TEXT,
+    p_exclude_church_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_clean TEXT;
+    v_exists BOOLEAN;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    v_clean := trim(both '-' from regexp_replace(lower(COALESCE(p_slug, '')), '[^a-z0-9]+', '-', 'g'));
+
+    IF length(v_clean) < 2 OR length(v_clean) > 64 OR v_clean !~ '^[a-z0-9]+(?:-[a-z0-9]+)*$' THEN
+        RETURN jsonb_build_object(
+            'available', false,
+            'normalized_slug', v_clean,
+            'reason', 'Slug must be 2–64 characters using lowercase letters, numbers, and hyphens only.'
+        );
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.churches c
+        WHERE lower(c.slug) = v_clean
+          AND (p_exclude_church_id IS NULL OR c.id <> p_exclude_church_id)
+    ) INTO v_exists;
+
+    RETURN jsonb_build_object(
+        'available', NOT v_exists,
+        'normalized_slug', v_clean,
+        'reason', CASE WHEN v_exists THEN 'This URL slug is already in use by another church.' ELSE NULL END
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.check_church_slug_availability(TEXT, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.check_church_slug_availability(TEXT, UUID) TO authenticated;
 
 -- ==============================================================================
 -- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 19 TABLES

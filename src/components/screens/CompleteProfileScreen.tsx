@@ -6,8 +6,13 @@ import {
   validateOnboardingProfile,
   normalizePhoneNumber,
   formatIndianMobileInput,
+  buildChurchPortalUrl,
   GENDER_LABELS,
 } from '../../lib/domain-logic';
+import {
+  getPreviewChurches,
+  persistScopedChurchSlug,
+} from '../../lib/church-slug';
 import {
   fetchGooglePeopleProfile,
   GOOGLE_PEOPLE_SCOPES,
@@ -27,8 +32,8 @@ import {
   LogOut,
   Sparkles,
   Info,
-  ArrowRight,
   AlertTriangle,
+  Lock,
 } from 'lucide-react';
 
 interface CompleteProfileScreenProps {
@@ -40,7 +45,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
   existingRequest,
   onSubmitted,
 }) => {
-  const { user, profile, googleProviderToken, refreshUserData, signOut } = useAuth();
+  const { user, profile, scopedChurch, googleProviderToken, refreshUserData, signOut } = useAuth();
 
   const [churches, setChurches] = useState<Church[]>([]);
   const [selectedChurchId, setSelectedChurchId] = useState<string>('');
@@ -68,33 +73,11 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
   useEffect(() => {
     const fetchChurches = async () => {
       if (!supabase) {
-        // Fallback for preview mode
-        const mockChurches: Church[] = [
-          {
-            id: 'c1111111-1111-1111-1111-111111111111',
-            code: 'BETHEL',
-            name: 'Bethel Christian Assembly',
-            address: '14 Anna Salai, Chennai',
-            phone: '+91 44 2811 0000',
-            email: 'admin@bethel.org',
-            is_active: true,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-          {
-            id: 'c2222222-2222-2222-2222-222222222222',
-            code: 'GRACE',
-            name: 'Grace Fellowship Church',
-            address: '88 Ring Road, Bangalore',
-            phone: '+91 80 2555 1234',
-            email: 'office@grace.org',
-            is_active: true,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          },
-        ];
-        setChurches(mockChurches);
-        setSelectedChurchId(mockChurches[0].id);
+        const previewChurches = getPreviewChurches().filter((c) => c.is_active);
+        setChurches(previewChurches);
+        setSelectedChurchId(
+          scopedChurch?.id || existingRequest?.church_id || previewChurches[0]?.id || ''
+        );
         setIsLoadingChurches(false);
         return;
       }
@@ -109,7 +92,9 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
         if (data && data.length > 0) {
           const activeChurches = data as Church[];
           setChurches(activeChurches);
-          if (!selectedChurchId) {
+          if (scopedChurch) {
+            setSelectedChurchId(scopedChurch.id);
+          } else if (!selectedChurchId) {
             setSelectedChurchId(existingRequest?.church_id || activeChurches[0].id);
           }
         }
@@ -121,11 +106,22 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     };
 
     fetchChurches();
-  }, [existingRequest]);
+  }, [existingRequest, scopedChurch]);
+
+  // Enforce scopedChurch lock whenever scopedChurch is present
+  useEffect(() => {
+    if (scopedChurch) {
+      setSelectedChurchId(scopedChurch.id);
+    }
+  }, [scopedChurch]);
 
   useEffect(() => {
     if (existingRequest) {
-      if (existingRequest.church_id) setSelectedChurchId(existingRequest.church_id);
+      if (scopedChurch) {
+        setSelectedChurchId(scopedChurch.id);
+      } else if (existingRequest.church_id) {
+        setSelectedChurchId(existingRequest.church_id);
+      }
       if (existingRequest.applicant_name) setFullName(existingRequest.applicant_name);
       if (existingRequest.date_of_birth) setDateOfBirth(existingRequest.date_of_birth);
       if (existingRequest.gender) setGender(existingRequest.gender);
@@ -145,7 +141,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
         setFullName(googleName);
       }
     }
-  }, [existingRequest, user, profile]);
+  }, [existingRequest, user, profile, scopedChurch]);
 
   const runPeopleApiImport = async (token: string, onlyFillEmpty: boolean) => {
     setIsImportingGoogle(true);
@@ -215,10 +211,18 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     setIsImportingGoogle(true);
     setGoogleImportNotice(null);
     try {
+      const redirectTo = scopedChurch
+        ? buildChurchPortalUrl(window.location.origin, scopedChurch.slug)
+        : window.location.origin;
+
+      if (scopedChurch) {
+        persistScopedChurchSlug(scopedChurch.slug, true);
+      }
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo,
           scopes: GOOGLE_PEOPLE_SCOPES.join(' '),
           queryParams: {
             access_type: 'offline',
@@ -253,6 +257,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     setErrors({});
     setDraftSavedMessage(null);
 
+    const targetChurchId = scopedChurch?.id || selectedChurchId;
     const formattedPhone = formatIndianMobileInput(phoneNumber);
     const draftValidation = validateOnboardingProfile({
       fullName,
@@ -260,7 +265,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       phone: formattedPhone,
       gender,
       villageName,
-      churchId: selectedChurchId,
+      churchId: targetChurchId,
       isDraft: true,
     });
 
@@ -270,10 +275,11 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       return;
     }
 
-    const targetChurch = churches.find((c) => c.id === selectedChurchId) || churches[0];
+    const targetChurch =
+      scopedChurch || churches.find((c) => c.id === targetChurchId) || churches[0];
     const draftRequest: AccessRequest = {
       id: existingRequest?.id || `req-${Date.now()}`,
-      church_id: selectedChurchId,
+      church_id: targetChurchId,
       user_id: user?.id || 'unknown',
       applicant_name: fullName.trim() || 'Draft Applicant',
       applicant_email: googleEmail,
@@ -304,7 +310,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       if (supabase) {
         try {
           const { error } = await supabase.rpc('submit_profile_request', {
-            p_church_id: selectedChurchId,
+            p_church_id: targetChurchId,
             p_full_name: fullName.trim() || 'Draft Applicant',
             p_date_of_birth: dateOfBirth || null,
             p_phone: formattedPhone || null,
@@ -338,6 +344,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
     setSubmissionSuccess(null);
     setDraftSavedMessage(null);
 
+    const targetChurchId = scopedChurch?.id || selectedChurchId;
     const phoneCheck = normalizePhoneNumber(phoneNumber);
     const normalizedPhone = phoneCheck.valid
       ? phoneCheck.normalized
@@ -348,7 +355,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       phone: normalizedPhone,
       gender,
       villageName,
-      churchId: selectedChurchId,
+      churchId: targetChurchId,
       isDraft: false,
     });
 
@@ -358,10 +365,11 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       return;
     }
 
-    const targetChurch = churches.find((c) => c.id === selectedChurchId) || churches[0];
+    const targetChurch =
+      scopedChurch || churches.find((c) => c.id === targetChurchId) || churches[0];
     const submittedRequest: AccessRequest = {
       id: existingRequest?.id || `req-${Date.now()}`,
-      church_id: selectedChurchId,
+      church_id: targetChurchId,
       user_id: user?.id || 'unknown',
       applicant_name: fullName.trim(),
       applicant_email: googleEmail,
@@ -392,7 +400,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       if (supabase) {
         try {
           const { error } = await supabase.rpc('submit_profile_request', {
-            p_church_id: selectedChurchId,
+            p_church_id: targetChurchId,
             p_full_name: fullName.trim(),
             p_date_of_birth: dateOfBirth,
             p_phone: normalizedPhone,
@@ -518,27 +526,58 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
             </p>
           </div>
 
-          {/* 2. Church Selection */}
+          {/* 2. Church Selection (Locked when entered via church-specific link) */}
           <div>
-            <label className="block text-slate-300 font-medium mb-1.5">
-              Select Your Church <span className="text-red-400">*</span>
-            </label>
-            <div className="relative">
-              <Building2 className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-              <select
-                value={selectedChurchId}
-                onChange={(e) => setSelectedChurchId(e.target.value)}
-                required
-                disabled={isLoadingChurches}
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500"
-              >
-                {churches.map((church) => (
-                  <option key={church.id} value={church.id}>
-                    {church.name} ({church.code}) {church.address ? `– ${church.address}` : ''}
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-slate-300 font-medium">
+                {scopedChurch ? 'Assigned Church' : 'Select Your Church'}{' '}
+                {!scopedChurch && <span className="text-red-400">*</span>}
+              </label>
+              {scopedChurch && (
+                <span className="text-[10px] font-mono text-sky-400 flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  <span>Locked via /c/{scopedChurch.slug}</span>
+                </span>
+              )}
             </div>
+
+            {scopedChurch ? (
+              <div className="bg-slate-950/90 border border-sky-500/30 rounded-xl px-4 py-3 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <Building2 className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>{scopedChurch.name}</span>
+                  </div>
+                  <span className="text-xs font-mono text-sky-300 shrink-0">
+                    {scopedChurch.code}
+                  </span>
+                </div>
+                {scopedChurch.address && (
+                  <p className="text-[11px] text-slate-400 pl-6">{scopedChurch.address}</p>
+                )}
+                <p className="text-[10px] text-slate-500 pl-6">
+                  Auto-selected from your church invitation link. Switching churches is disabled.
+                </p>
+              </div>
+            ) : (
+              <div className="relative">
+                <Building2 className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
+                <select
+                  value={selectedChurchId}
+                  onChange={(e) => setSelectedChurchId(e.target.value)}
+                  required
+                  disabled={isLoadingChurches}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500"
+                >
+                  {churches.map((church) => (
+                    <option key={church.id} value={church.id}>
+                      {church.name} ({church.code}) {church.address ? `– ${church.address}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {errors.churchId && (
               <p className="text-[11px] text-red-400 mt-1">{errors.churchId}</p>
             )}
