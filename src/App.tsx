@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabaseConfig, hasOAuthCallback } from './lib/supabase';
+import { extractChurchSlugFromPath } from './lib/domain-logic';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SetupRequiredScreen } from './components/common/SetupRequiredScreen';
 import { Navbar } from './components/common/Navbar';
@@ -216,6 +217,7 @@ const MainAppContent: React.FC<{
 
 export default function App() {
   const [isPreviewActive, setIsPreviewActive] = useState(false);
+  const [enteredAuthFromRoute, setEnteredAuthFromRoute] = useState(false);
   const [pathname, setPathname] = useState<string>(() =>
     typeof window !== 'undefined' ? window.location.pathname : '/'
   );
@@ -251,7 +253,14 @@ export default function App() {
 
   // Unauthenticated single-use Member Portal link route (bypasses auth & setup gates)
   if (isMemberPortalRoute(pathname) && !hasOAuthCallback()) {
-    return <MemberPortalScreen onNavigateHome={() => navigateTo('/home')} />;
+    return (
+      <MemberPortalScreen
+        onNavigatePath={(path) => {
+          setEnteredAuthFromRoute(true);
+          navigateTo(path);
+        }}
+      />
+    );
   }
 
   // Always allow public Home, Privacy Policy, and Terms of Service routes without login or DB setup
@@ -267,15 +276,24 @@ export default function App() {
     }
   }
 
-  // If the user arrived with an OAuth callback fragment (#access_token=) or has an active OAuth user,
-  // do NOT show SetupRequiredScreen: allow AuthProvider to mount and proceed to CompleteProfileScreen!
+  // If the user arrived with an OAuth callback fragment (#access_token=), an active OAuth user,
+  // or directly opened a church-specific /{slug} URL, allow AuthProvider to mount so branded sign-in
+  // and onboarding render seamlessly.
   const hasOAuthActivity =
     hasOAuthCallback() ||
     (typeof window !== 'undefined' &&
       Boolean(localStorage.getItem('cms_oauth_user') || sessionStorage.getItem('cms_preview_persona')));
 
-  // If Supabase credentials are not set, show the SetupRequiredScreen by default
-  if (!supabaseConfig.isConfigured && !isPreviewActive && !hasOAuthActivity) {
+  const hasExplicitSlugRoute = Boolean(extractChurchSlugFromPath(pathname));
+
+  // If Supabase credentials are not set, show the SetupRequiredScreen by default on "/"
+  if (
+    !supabaseConfig.isConfigured &&
+    !isPreviewActive &&
+    !hasOAuthActivity &&
+    !hasExplicitSlugRoute &&
+    !enteredAuthFromRoute
+  ) {
     return (
       <div className="relative">
         <SetupRequiredScreen />

@@ -296,9 +296,10 @@ export interface MemberPortalPayload {
   church?: {
     id: string;
     code: string;
+    slug?: string;
     name: string;
-    address: string | null;
-    phone: string | null;
+    address?: string | null;
+    phone?: string | null;
   };
   member?: {
     id: string;

@@ -380,6 +380,7 @@ export const MembersScreen: React.FC = () => {
         churchMeta: {
           name: activeChurch.name,
           code: activeChurch.code,
+          slug: activeChurch.slug,
           address: activeChurch.address,
           phone: activeChurch.phone,
         },

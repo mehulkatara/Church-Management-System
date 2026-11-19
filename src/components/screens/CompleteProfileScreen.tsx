@@ -536,7 +536,7 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
               {scopedChurch && (
                 <span className="text-[10px] font-mono text-sky-400 flex items-center gap-1">
                   <Lock className="w-3 h-3" />
-                  <span>Locked via /c/{scopedChurch.slug}</span>
+                  <span>Locked via /{scopedChurch.slug}</span>
                 </span>
               )}
             </div>

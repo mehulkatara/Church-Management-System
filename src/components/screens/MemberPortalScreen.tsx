@@ -9,6 +9,7 @@ import {
   Trophy,
   ArrowLeft,
   Eye,
+  UserCheck,
 } from 'lucide-react';
 import type { MemberPortalPayload } from '../../types/database';
 import {
@@ -20,11 +21,11 @@ import {
 import { redeemMemberShareLink } from '../../lib/member-share-links';
 
 interface MemberPortalScreenProps {
-  onNavigateHome: () => void;
+  onNavigatePath: (path: string) => void;
 }
 
 export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
-  onNavigateHome,
+  onNavigatePath,
 }) => {
   const [payload, setPayload] = useState<MemberPortalPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -175,6 +176,20 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
 
   if (!payload || !payload.success || !payload.member || !payload.church) {
     const code = payload?.error_code || 'invalid';
+    const isExpiredOrRevoked = code === 'already_used' || code === 'revoked';
+    const churchInfo = payload?.church;
+    const churchSlug = churchInfo?.slug?.trim() || '';
+    const churchName = churchInfo?.name?.trim() || '';
+    const hasChurchRoute = isExpiredOrRevoked && Boolean(churchSlug);
+    const signInPath = hasChurchRoute ? `/${churchSlug}` : '/';
+    const primaryCtaLabel =
+      hasChurchRoute && churchName
+        ? `Go to Church Sign-In (${churchName})`
+        : hasChurchRoute
+        ? 'Go to Church Sign-In'
+        : 'Go to Sign In';
+    const headerLinkLabel = hasChurchRoute ? 'Church Sign-In' : 'Sign In';
+
     const title =
       code === 'already_used'
         ? 'Single-Use Link Expired'
@@ -185,13 +200,12 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
     const subtitle =
       payload?.message ||
       (code === 'already_used'
-        ? 'This single-use link has already been opened once and cannot be reused. Please contact your church staff for a new link.'
+        ? 'This single-use link has already been opened once and cannot be reused. Please contact your church staff for a new link or sign in to your church account.'
         : code === 'revoked'
-        ? 'This member link was revoked or replaced by a newer link. Please request a fresh link from your church staff.'
+        ? 'This member link was revoked or replaced by a newer link. Please request a fresh link from your church staff or sign in to your church account.'
         : 'This member portal link is invalid or incomplete. Please check the URL sent by your church staff.');
 
-    const StatusIcon =
-      code === 'already_used' ? Clock : ShieldAlert;
+    const StatusIcon = code === 'already_used' ? Clock : ShieldAlert;
 
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -200,22 +214,22 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
             <div className="flex items-center gap-2.5 min-w-0">
               <Church className="w-5 h-5 text-sky-400 shrink-0" />
               <span className="text-sm font-semibold text-white truncate">
-                Member Portal
+                {churchName || 'Member Portal'}
               </span>
             </div>
             <button
               type="button"
-              onClick={onNavigateHome}
+              onClick={() => onNavigatePath(signInPath)}
               className="text-xs text-slate-300 hover:text-white flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Return Home</span>
+              <span>{headerLinkLabel}</span>
             </button>
           </div>
         </header>
 
         <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-5">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-5">
             <div className="w-11 h-11 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center text-amber-400">
               <StatusIcon className="w-5 h-5" />
             </div>
@@ -224,21 +238,42 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
               <h1 className="text-xl font-bold text-white tracking-tight [text-wrap:balance]">
                 {title}
               </h1>
-              <p className="text-sm text-slate-300 leading-relaxed">
-                {subtitle}
-              </p>
+              <p className="text-sm text-slate-300 leading-relaxed">{subtitle}</p>
             </div>
 
-            <div className="pt-4 border-t border-slate-800 flex items-center justify-between gap-3">
+            {isExpiredOrRevoked && (
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-semibold text-white">
+                  <UserCheck className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>Access Your Profile Anytime</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Sign in on{' '}
+                  <strong className="text-white">
+                    {churchName ? `${churchName}'s sign-in page` : 'your church sign-in page'}
+                  </strong>{' '}
+                  to create or complete your profile, then ask church staff (Accountant or Admin) to
+                  link your profile to your member record. Once linked, you can log in anytime to
+                  view your profile, donations, and leaderboard without needing single-use links.
+                </p>
+                {hasChurchRoute && (
+                  <div className="pt-1 text-[11px] font-mono text-sky-400 truncate">
+                    /{churchSlug}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="pt-4 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
               <span className="text-xs text-slate-500">
                 Single-use links expire after opening
               </span>
               <button
                 type="button"
-                onClick={onNavigateHome}
+                onClick={() => onNavigatePath(signInPath)}
                 className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
-                Go to Home
+                {primaryCtaLabel}
               </button>
             </div>
           </div>

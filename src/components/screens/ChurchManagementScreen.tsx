@@ -391,7 +391,7 @@ export const ChurchManagementScreen: React.FC = () => {
               </label>
               <div className="flex items-stretch bg-slate-950 border border-slate-700 rounded-xl overflow-hidden focus-within:border-sky-500">
                 <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-slate-400 font-mono flex items-center select-none">
-                  /c/
+                  /
                 </span>
                 <input
                   type="text"
@@ -494,7 +494,7 @@ export const ChurchManagementScreen: React.FC = () => {
               </label>
               <div className="flex items-stretch bg-slate-950 border border-slate-700 rounded-xl overflow-hidden focus-within:border-sky-500">
                 <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-slate-400 font-mono flex items-center select-none">
-                  /c/
+                  /
                 </span>
                 <input
                   type="text"

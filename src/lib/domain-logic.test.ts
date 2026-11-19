@@ -524,14 +524,20 @@ test('Church URL slug normalization, validation, path parsing, and portal URL ge
 
   assert.equal(validateChurchSlug('a').valid, false);
   assert.equal(validateChurchSlug('member-portal').valid, false);
+  assert.equal(validateChurchSlug('login').valid, false);
+  assert.equal(validateChurchSlug('auth').valid, false);
+  assert.equal(validateChurchSlug('assets').valid, false);
 
-  assert.equal(extractChurchSlugFromPath('/c/grace-bethel'), 'grace-bethel');
-  assert.equal(extractChurchSlugFromPath('/c/Grace-Bethel/'), 'grace-bethel');
+  assert.equal(extractChurchSlugFromPath('/grace-bethel'), 'grace-bethel');
+  assert.equal(extractChurchSlugFromPath('/Grace-Bethel/'), 'grace-bethel');
+  assert.equal(extractChurchSlugFromPath('/c/grace-bethel'), null);
+  assert.equal(extractChurchSlugFromPath('/c'), null);
   assert.equal(extractChurchSlugFromPath('/home'), null);
-  assert.equal(extractChurchSlugFromPath('/c/a'), null);
+  assert.equal(extractChurchSlugFromPath('/login'), null);
+  assert.equal(extractChurchSlugFromPath('/a'), null);
 
   assert.equal(
     buildChurchPortalUrl('https://church.example.com/', 'Grace Bethel'),
-    'https://church.example.com/c/grace-bethel'
+    'https://church.example.com/grace-bethel'
   );
 });

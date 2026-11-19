@@ -515,6 +515,28 @@ BEGIN
         );
     END IF;
 
+    IF v_clean = ANY(ARRAY[
+        'home',
+        'privacy',
+        'privacy-policy',
+        'terms',
+        'terms-of-service',
+        'member-portal',
+        'api',
+        'auth',
+        'login',
+        'c',
+        'assets',
+        'favicon-ico',
+        'robots-txt'
+    ]) THEN
+        RETURN jsonb_build_object(
+            'available', false,
+            'normalized_slug', v_clean,
+            'reason', '"' || v_clean || '" is a reserved application route. Please choose another slug.'
+        );
+    END IF;
+
     SELECT EXISTS (
         SELECT 1
         FROM public.churches c
@@ -2933,6 +2955,7 @@ DECLARE
     v_link RECORD;
     v_consumed_at TIMESTAMPTZ;
     v_church RECORD;
+    v_church_public JSONB;
     v_member RECORD;
     v_donations JSONB;
     v_leaderboard_fys JSONB;
@@ -2960,20 +2983,38 @@ BEGIN
         );
     END IF;
 
+    SELECT id, code, slug, name, address, phone
+    INTO v_church
+    FROM public.churches
+    WHERE id = v_link.church_id;
+
+    IF v_church.id IS NOT NULL THEN
+        v_church_public := jsonb_build_object(
+            'id', v_church.id,
+            'code', v_church.code,
+            'slug', v_church.slug,
+            'name', v_church.name
+        );
+    ELSE
+        v_church_public := NULL;
+    END IF;
+
     IF v_link.status = 'revoked' THEN
-        RETURN jsonb_build_object(
+        RETURN jsonb_strip_nulls(jsonb_build_object(
             'success', false,
             'error_code', 'revoked',
-            'message', 'This member link was revoked or replaced by church staff. Please request a fresh link.'
-        );
+            'message', 'This member link was revoked or replaced by church staff. Please request a fresh link or sign in to your church account.',
+            'church', v_church_public
+        ));
     END IF;
 
     IF v_link.status = 'consumed' THEN
-        RETURN jsonb_build_object(
+        RETURN jsonb_strip_nulls(jsonb_build_object(
             'success', false,
             'error_code', 'already_used',
-            'message', 'This single-use link has already been opened and expired. Please ask your church staff for a new link.'
-        );
+            'message', 'This single-use link has already been opened and expired. Please ask your church staff for a new link or sign in to your church account.',
+            'church', v_church_public
+        ));
     END IF;
 
     v_consumed_at := timezone('utc'::text, now());
@@ -2983,11 +3024,6 @@ BEGIN
         status = 'consumed',
         consumed_at = v_consumed_at
     WHERE id = v_link.id;
-
-    SELECT id, code, name, address, phone
-    INTO v_church
-    FROM public.churches
-    WHERE id = v_link.church_id;
 
     SELECT
         id,
@@ -3164,6 +3200,7 @@ BEGIN
         'church', jsonb_build_object(
             'id', v_church.id,
             'code', v_church.code,
+            'slug', v_church.slug,
             'name', v_church.name,
             'address', v_church.address,
             'phone', v_church.phone

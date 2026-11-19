@@ -990,7 +990,11 @@ const RESERVED_CHURCH_SLUGS = new Set([
   'member-portal',
   'api',
   'auth',
+  'login',
   'c',
+  'assets',
+  'favicon-ico',
+  'robots-txt',
 ]);
 
 /**
@@ -1060,11 +1064,11 @@ export function validateChurchSlug(slug: string): {
 }
 
 /**
- * Extracts a church slug from URL paths formatted as /c/<slug>.
+ * Extracts a church slug from root-level URL paths formatted as /<slug>.
  */
 export function extractChurchSlugFromPath(pathname: string): string | null {
   const clean = (pathname || '').replace(/\/+$/, '');
-  const match = /^\/c\/([^/]+)$/i.exec(clean);
+  const match = /^\/([^/]+)$/.exec(clean);
   if (!match) return null;
 
   try {
@@ -1082,5 +1086,5 @@ export function extractChurchSlugFromPath(pathname: string): string | null {
 export function buildChurchPortalUrl(origin: string, slug: string): string {
   const cleanOrigin = (origin || '').replace(/\/+$/, '');
   const cleanSlug = suggestChurchSlug(slug);
-  return `${cleanOrigin}/c/${cleanSlug}`;
+  return `${cleanOrigin}/${cleanSlug}`;
 }

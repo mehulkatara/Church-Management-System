@@ -129,7 +129,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onSuccess, onNavigate })
                 <span aria-hidden="true" className="text-slate-600">
                   &middot;
                 </span>
-                <span>/c/{scopedChurch.slug}</span>
+                <span>/{scopedChurch.slug}</span>
               </div>
               <h1 className="text-2xl font-bold text-white tracking-tight text-balance">
                 {scopedChurch.name}

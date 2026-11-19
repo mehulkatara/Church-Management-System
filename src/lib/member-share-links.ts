@@ -10,6 +10,7 @@ import {
   buildFullReceiptNumber,
   getFinancialYearOptions,
   getFinancialYear,
+  suggestChurchSlug,
 } from './domain-logic';
 
 const PREVIEW_LINKS_KEY = 'cms_preview_share_links';
@@ -18,6 +19,7 @@ interface PreviewStoredShareLink extends MemberShareLink {
   raw_token: string;
   church_name: string;
   church_code: string;
+  church_slug?: string;
   church_address: string | null;
   church_phone: string | null;
   member_snapshot: {
@@ -102,7 +104,13 @@ export async function fetchLatestMemberShareLink(
 export async function createMemberShareLink(params: {
   churchId: string;
   member: Member;
-  churchMeta?: { name: string; code: string; address: string | null; phone: string | null };
+  churchMeta?: {
+    name: string;
+    code: string;
+    slug?: string;
+    address: string | null;
+    phone: string | null;
+  };
 }): Promise<{ link: MemberShareLink; rawToken: string }> {
   const { churchId, member, churchMeta } = params;
 
@@ -115,6 +123,8 @@ export async function createMemberShareLink(params: {
     );
 
     const rawToken = generateRandomHexToken();
+    const churchCode = churchMeta?.code || 'GBC-CHN';
+    const churchName = churchMeta?.name || 'Grace Bethel Church, Chennai';
     const newLink: PreviewStoredShareLink = {
       id: `link-${Date.now()}`,
       church_id: churchId,
@@ -126,8 +136,9 @@ export async function createMemberShareLink(params: {
       revoked_at: null,
       revoked_by: null,
       raw_token: rawToken,
-      church_name: churchMeta?.name || 'Grace Bethel Church, Chennai',
-      church_code: churchMeta?.code || 'GBC-CHN',
+      church_name: churchName,
+      church_code: churchCode,
+      church_slug: churchMeta?.slug || suggestChurchSlug(churchCode || churchName),
       church_address: churchMeta?.address ?? '45 Anna Salai, Chennai',
       church_phone: churchMeta?.phone ?? '+91 98400 11223',
       member_snapshot: {
@@ -344,6 +355,7 @@ function buildPreviewPortalPayload(stored: PreviewStoredShareLink): MemberPortal
     church: {
       id: stored.church_id,
       code: stored.church_code,
+      slug: stored.church_slug || suggestChurchSlug(stored.church_code || stored.church_name),
       name: stored.church_name,
       address: stored.church_address,
       phone: stored.church_phone,
@@ -374,18 +386,32 @@ export async function redeemMemberShareLink(rawToken: string): Promise<MemberPor
     const previewLinks = loadPreviewLinks();
     const previewMatch = previewLinks.find((item) => item.raw_token === cleanToken);
     if (previewMatch) {
+      const previewChurchSlug =
+        previewMatch.church_slug ||
+        suggestChurchSlug(previewMatch.church_code || previewMatch.church_name);
+      const previewChurchPublic = {
+        id: previewMatch.church_id,
+        code: previewMatch.church_code,
+        slug: previewChurchSlug,
+        name: previewMatch.church_name,
+      };
+
       if (previewMatch.status === 'revoked') {
         return {
           success: false,
           error_code: 'revoked',
-          message: 'This member link was revoked or replaced by church staff. Please request a fresh link.',
+          message:
+            'This member link was revoked or replaced by church staff. Please request a fresh link or sign in to your church account.',
+          church: previewChurchPublic,
         };
       }
       if (previewMatch.status === 'consumed') {
         return {
           success: false,
           error_code: 'already_used',
-          message: 'This single-use link has already been opened and expired. Please ask your church staff for a new link.',
+          message:
+            'This single-use link has already been opened and expired. Please ask your church staff for a new link or sign in to your church account.',
+          church: previewChurchPublic,
         };
       }
 

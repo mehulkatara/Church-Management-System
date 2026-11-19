@@ -46,9 +46,19 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SAMPLE_CHURCH: Church = DEFAULT_PREVIEW_CHURCHES[0];
 
-function isChurchPathPrefix(pathname: string): boolean {
-  const clean = (pathname || '').replace(/\/+$/, '');
-  return clean === '/c' || clean.startsWith('/c/');
+const KNOWN_NON_CHURCH_ROUTES = new Set([
+  '/',
+  '/home',
+  '/privacy',
+  '/privacy-policy',
+  '/terms',
+  '/terms-of-service',
+  '/member-portal',
+]);
+
+function isKnownNonChurchRoute(pathname: string): boolean {
+  const clean = (pathname || '').replace(/\/+$/, '') || '/';
+  return KNOWN_NON_CHURCH_ROUTES.has(clean);
 }
 
 export const AuthProvider: React.FC<{
@@ -67,7 +77,7 @@ export const AuthProvider: React.FC<{
   const [isScopedChurchLoading, setIsScopedChurchLoading] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     return (
-      isChurchPathPrefix(window.location.pathname) ||
+      !isKnownNonChurchRoute(window.location.pathname) ||
       Boolean(window.sessionStorage.getItem(SCOPED_CHURCH_SLUG_SESSION_KEY))
     );
   });
@@ -76,18 +86,18 @@ export const AuthProvider: React.FC<{
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Resolve church scope from /c/<slug> URL or persisted OAuth/session handoff
+  // Resolve church scope from root /<slug> URL or persisted OAuth/session handoff
   useEffect(() => {
     let isCancelled = false;
 
     const resolveScope = async () => {
       const currentPath =
         pathname || (typeof window !== 'undefined' ? window.location.pathname : '/');
-      const isExplicitChurchRoute = isChurchPathPrefix(currentPath);
+      const isCandidateOrUnknownRoute = !isKnownNonChurchRoute(currentPath);
       const pathSlug = extractChurchSlugFromPath(currentPath);
 
-      if (isExplicitChurchRoute && !pathSlug) {
-        // Malformed /c/ or invalid slug format -> silently redirect to standard login
+      if (isCandidateOrUnknownRoute && !pathSlug) {
+        // Legacy /c/<slug>, multi-segment, reserved, or malformed path -> silently redirect to standard login
         persistScopedChurchSlug(null);
         if (!isCancelled) {
           setScopedChurch(null);
@@ -97,7 +107,7 @@ export const AuthProvider: React.FC<{
         return;
       }
 
-      const fallbackSlug = !isExplicitChurchRoute ? consumeOAuthScopedChurchSlug() : null;
+      const fallbackSlug = !isCandidateOrUnknownRoute ? consumeOAuthScopedChurchSlug() : null;
       const targetSlug = pathSlug || fallbackSlug;
 
       if (!targetSlug) {
@@ -116,15 +126,15 @@ export const AuthProvider: React.FC<{
       if (resolved) {
         persistScopedChurchSlug(resolved.slug, false);
         setScopedChurch(resolved);
-        // Restore canonical /c/<slug> path if returned to "/" after OAuth redirect
-        if (!isExplicitChurchRoute && onReplacePath && currentPath === '/') {
-          onReplacePath(`/c/${resolved.slug}`);
+        // Restore canonical /<slug> path if returned to "/" after OAuth redirect
+        if (!isCandidateOrUnknownRoute && onReplacePath && currentPath === '/') {
+          onReplacePath(`/${resolved.slug}`);
         }
       } else {
         // Unrecognized or inactive church slug -> silently redirect to standard multi-church login
         persistScopedChurchSlug(null);
         setScopedChurch(null);
-        if (isExplicitChurchRoute && onReplacePath) {
+        if (isCandidateOrUnknownRoute && onReplacePath) {
           onReplacePath('/');
         }
       }
@@ -720,7 +730,7 @@ export const AuthProvider: React.FC<{
     return getHighestChurchRole(approvedRoles);
   }, [isPlatformAdmin, activeChurch, churchAccessList]);
 
-  // Lock church switching when scoped via /c/<slug> during onboarding or for non-admin users (members, etc.); admins can switch
+  // Lock church switching when scoped via /<slug> during onboarding or for non-admin users (members, etc.); admins can switch
   const isChurchLocked = useMemo<boolean>(() => {
     if (!scopedChurch) return false;
     if (isPlatformAdmin || activeRole === 'admin') return false;
@@ -745,8 +755,8 @@ export const AuthProvider: React.FC<{
       if (scopedChurch && scopedChurch.id === updatedChurch.id) {
         setScopedChurch(updatedChurch);
         persistScopedChurchSlug(updatedChurch.slug, false);
-        if (onReplacePath && isChurchPathPrefix(pathname)) {
-          onReplacePath(`/c/${updatedChurch.slug}`);
+        if (onReplacePath && extractChurchSlugFromPath(pathname) !== null) {
+          onReplacePath(`/${updatedChurch.slug}`);
         }
       }
       if (activeChurch && activeChurch.id === updatedChurch.id) {
@@ -759,7 +769,7 @@ export const AuthProvider: React.FC<{
   const clearScopedChurch = useCallback(() => {
     persistScopedChurchSlug(null);
     setScopedChurch(null);
-    if (onReplacePath && isChurchPathPrefix(pathname)) {
+    if (onReplacePath && extractChurchSlugFromPath(pathname) !== null) {
       onReplacePath('/');
     }
   }, [onReplacePath, pathname]);
@@ -795,10 +805,10 @@ export const AuthProvider: React.FC<{
     setAuthorizedChurches([]);
     setUserRequests([]);
 
-    // Keep user on /c/<slug> branded login page if they signed out from a church link
+    // Keep user on /<slug> branded login page if they signed out from a church link
     if (scopedChurch && onReplacePath) {
       persistScopedChurchSlug(scopedChurch.slug, false);
-      onReplacePath(`/c/${scopedChurch.slug}`);
+      onReplacePath(`/${scopedChurch.slug}`);
     }
   };
 

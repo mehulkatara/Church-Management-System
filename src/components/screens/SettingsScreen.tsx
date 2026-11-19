@@ -117,7 +117,7 @@ export const SettingsScreen: React.FC = () => {
 
       setSlugInput(availability.normalizedSlug);
       setSlugSuccess(
-        `Church URL updated to /c/${availability.normalizedSlug}`
+        `Church URL updated to /${availability.normalizedSlug}`
       );
     } catch (err: unknown) {
       setSlugError(err instanceof Error ? err.message : 'Failed to update church URL slug.');
@@ -188,7 +188,7 @@ export const SettingsScreen: React.FC = () => {
             <div className="flex flex-col sm:flex-row gap-2">
               <div className="flex-1 flex items-stretch bg-slate-950 border border-slate-700 rounded-xl overflow-hidden focus-within:border-sky-500">
                 <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-slate-400 font-mono flex items-center select-none">
-                  /c/
+                  /
                 </span>
                 <input
                   type="text"
