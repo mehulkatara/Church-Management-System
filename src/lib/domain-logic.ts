@@ -38,6 +38,53 @@ export function buildAutoReceiptPrefix(
 }
 
 /**
+ * Builds the uppercase church code member ID prefix: UPPER(CHURCH_CODE)-
+ * Example: "ABC-"
+ */
+export function buildChurchMemberPrefix(churchCode: string | null | undefined): string {
+  const cleanCode = (churchCode || 'CHURCH').trim().toUpperCase() || 'CHURCH';
+  return `${cleanCode}-`;
+}
+
+/**
+ * Computes the next sequential church-code-prefixed member number (e.g. ABC-1, ABC-2)
+ * using plain positive integers without leading zeros.
+ * Existing legacy M-0001 member numbers are ignored so the church-code series starts at 1.
+ */
+export function computeNextChurchMemberNumber(
+  churchCode: string | null | undefined,
+  existingMemberNumbers: Array<string | null | undefined>
+): string {
+  const prefix = buildChurchMemberPrefix(churchCode);
+  let maxSeq = 0;
+  const taken = new Set<string>();
+
+  for (const raw of existingMemberNumbers) {
+    if (!raw || typeof raw !== 'string') continue;
+    const upper = raw.trim().toUpperCase();
+    if (!upper) continue;
+    taken.add(upper);
+
+    if (upper.startsWith(prefix)) {
+      const suffix = upper.slice(prefix.length);
+      if (/^[1-9][0-9]*$/.test(suffix)) {
+        const parsed = Number(suffix);
+        if (Number.isSafeInteger(parsed) && parsed > maxSeq) {
+          maxSeq = parsed;
+        }
+      }
+    }
+  }
+
+  let nextSeq = maxSeq + 1;
+  while (taken.has(`${prefix}${nextSeq}`)) {
+    nextSeq += 1;
+  }
+
+  return `${prefix}${nextSeq}`;
+}
+
+/**
  * Sanitizes receipt number input to digits only and strips all leading zeros.
  * Handles accidental pastes containing slashes by extracting the trailing segment first.
  */

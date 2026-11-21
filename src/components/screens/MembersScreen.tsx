@@ -11,6 +11,8 @@ import {
   checkRolePermission,
   buildMemberPortalUrl,
   buildMemberShareWhatsAppUrl,
+  buildChurchMemberPrefix,
+  computeNextChurchMemberNumber,
 } from '../../lib/domain-logic';
 import {
   fetchLatestMemberShareLink,
@@ -189,7 +191,17 @@ export const MembersScreen: React.FC = () => {
     setIsSaving(true);
 
     try {
-      const memberNumber = `M-${String(members.length + 1).padStart(4, '0')}`;
+      const { data: existingMemberRows, error: existingErr } = await supabase
+        .from('members')
+        .select('member_number')
+        .eq('church_id', activeChurch.id);
+
+      const existingNumbers =
+        !existingErr && existingMemberRows
+          ? (existingMemberRows as Array<{ member_number: string }>).map((r) => r.member_number)
+          : members.map((m) => m.member_number);
+
+      const memberNumber = computeNextChurchMemberNumber(activeChurch.code, existingNumbers);
 
       const { error } = await supabase.from('members').insert({
         church_id: activeChurch.id,
@@ -807,9 +819,14 @@ export const MembersScreen: React.FC = () => {
               />
             </div>
 
-            <p className="text-[11px] text-slate-500 leading-relaxed">
-              New members receive a server-enforced initial status of <strong>Active</strong>.
-              Only an authorized church Accountant can subsequently change membership status.
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              New members automatically receive sequential church-code IDs starting at{' '}
+              <span className="font-mono tabular-nums text-sky-300">
+                {buildChurchMemberPrefix(activeChurch?.code)}1
+              </span>{' '}
+              (existing member IDs remain unchanged) and an initial status of{' '}
+              <strong className="text-slate-200">Active</strong>. Only an authorized church
+              Accountant can subsequently change membership status.
             </p>
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">

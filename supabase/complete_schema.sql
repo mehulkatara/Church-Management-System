@@ -555,6 +555,120 @@ $$;
 REVOKE ALL ON FUNCTION public.check_church_slug_availability(TEXT, UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.check_church_slug_availability(TEXT, UUID) TO authenticated;
 
+-- Normalize churches.code and lock it from changing once members exist
+CREATE OR REPLACE FUNCTION public.guard_church_code_change()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    NEW.code := upper(trim(COALESCE(NEW.code, '')));
+
+    IF length(NEW.code) = 0 THEN
+        RAISE EXCEPTION 'Church code cannot be empty.';
+    END IF;
+
+    IF TG_OP = 'UPDATE' AND NEW.code IS DISTINCT FROM upper(trim(OLD.code)) THEN
+        IF EXISTS (
+            SELECT 1
+            FROM public.members m
+            WHERE m.church_id = OLD.id
+        ) THEN
+            RAISE EXCEPTION 'Church code (%) is locked and cannot be changed after members exist.', OLD.code;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_church_code_change ON public.churches;
+CREATE TRIGGER trg_guard_church_code_change
+    BEFORE INSERT OR UPDATE ON public.churches
+    FOR EACH ROW EXECUTE FUNCTION public.guard_church_code_change();
+
+-- Sequential <UPPER_CHURCH_CODE>-<N> generator (starts at 1; preserves existing M-0001 rows)
+CREATE OR REPLACE FUNCTION public.generate_next_church_member_number(
+    p_church_id UUID
+)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_church_code TEXT;
+    v_prefix TEXT;
+    v_prefix_len INT;
+    v_next_seq BIGINT;
+BEGIN
+    IF p_church_id IS NULL THEN
+        RAISE EXCEPTION 'Church ID is required to generate member number.';
+    END IF;
+
+    SELECT upper(trim(code))
+    INTO v_church_code
+    FROM public.churches
+    WHERE id = p_church_id
+    FOR UPDATE;
+
+    IF v_church_code IS NULL OR length(v_church_code) = 0 THEN
+        RAISE EXCEPTION 'Church not found or missing church code.';
+    END IF;
+
+    v_prefix := v_church_code || '-';
+    v_prefix_len := length(v_prefix);
+
+    SELECT COALESCE(
+        MAX(
+            CASE
+                WHEN upper(left(m.member_number, v_prefix_len)) = v_prefix
+                 AND substr(m.member_number, v_prefix_len + 1) ~ '^[1-9][0-9]*$'
+                THEN substr(m.member_number, v_prefix_len + 1)::BIGINT
+                ELSE 0
+            END
+        ),
+        0
+    ) + 1
+    INTO v_next_seq
+    FROM public.members m
+    WHERE m.church_id = p_church_id;
+
+    WHILE EXISTS (
+        SELECT 1
+        FROM public.members m
+        WHERE m.church_id = p_church_id
+          AND upper(m.member_number) = upper(v_prefix || v_next_seq::TEXT)
+    ) LOOP
+        v_next_seq := v_next_seq + 1;
+    END LOOP;
+
+    RETURN v_prefix || v_next_seq::TEXT;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.generate_next_church_member_number(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.generate_next_church_member_number(UUID) TO authenticated;
+
+-- Authoritative BEFORE INSERT trigger on public.members (does NOT alter existing rows)
+CREATE OR REPLACE FUNCTION public.assign_church_member_number()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    NEW.member_number := public.generate_next_church_member_number(NEW.church_id);
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_assign_church_member_number ON public.members;
+CREATE TRIGGER trg_assign_church_member_number
+    BEFORE INSERT ON public.members
+    FOR EACH ROW EXECUTE FUNCTION public.assign_church_member_number();
+
 -- ==============================================================================
 -- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 19 TABLES
 -- ==============================================================================
@@ -1826,7 +1940,7 @@ BEGIN
         END IF;
         UPDATE public.members SET contact_email = NULL WHERE id = v_final_member_id;
     ELSE
-        v_member_number := 'M-' || lpad((COALESCE((SELECT COUNT(*) FROM public.members WHERE church_id = v_req.church_id), 0) + 1)::text, 4, '0');
+        v_member_number := public.generate_next_church_member_number(v_req.church_id);
 
         INSERT INTO public.members (
             church_id,
@@ -2006,7 +2120,7 @@ BEGIN
     END IF;
 
     IF p_create_new THEN
-        v_member_number := 'M-' || lpad((COALESCE((SELECT COUNT(*) FROM public.members WHERE church_id = v_target_church_id), 0) + 1)::text, 4, '0');
+        v_member_number := public.generate_next_church_member_number(v_target_church_id);
 
         INSERT INTO public.members (
             church_id,

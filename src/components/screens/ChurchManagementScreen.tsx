@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import type { Church } from '../../types/database';
 import {
   buildAutoReceiptPrefix,
+  buildChurchMemberPrefix,
   buildChurchPortalUrl,
   normalizeChurchSlugInput,
   suggestChurchSlug,
@@ -322,11 +323,19 @@ export const ChurchManagementScreen: React.FC = () => {
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono">
-                <span className="text-slate-500">Auto Receipt Format:</span>
-                <span className="text-sky-300 font-semibold tabular-nums">
-                  {buildAutoReceiptPrefix(church.code, new Date())}#
-                </span>
+              <div className="pt-2 border-t border-slate-800/80 space-y-1 text-xs font-mono">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-500">Auto Member ID Series:</span>
+                  <span className="text-sky-300 font-semibold tabular-nums">
+                    {buildChurchMemberPrefix(church.code)}1, {buildChurchMemberPrefix(church.code)}2, ...
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-500">Auto Receipt Format:</span>
+                  <span className="text-sky-300 font-semibold tabular-nums">
+                    {buildAutoReceiptPrefix(church.code, new Date())}#
+                  </span>
+                </div>
               </div>
             </div>
           );
@@ -445,12 +454,20 @@ export const ChurchManagementScreen: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] text-slate-400">
-              Receipt prefixes are automatically derived from the church code and donation date&apos;s
-              financial year:{' '}
-              <span className="font-mono text-sky-300">
-                {buildAutoReceiptPrefix(code || 'CODE', new Date())}#
-              </span>
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] text-slate-400 space-y-1">
+              <div>
+                Member IDs:{' '}
+                <span className="font-mono text-sky-300 tabular-nums">
+                  {buildChurchMemberPrefix(code || 'CODE')}1, {buildChurchMemberPrefix(code || 'CODE')}2, ...
+                </span>{' '}
+                &middot; Receipts:{' '}
+                <span className="font-mono text-sky-300 tabular-nums">
+                  {buildAutoReceiptPrefix(code || 'CODE', new Date())}#
+                </span>
+              </div>
+              <div className="text-slate-500">
+                Church code is stored in uppercase and locked once members exist.
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">

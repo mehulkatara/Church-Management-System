@@ -480,6 +480,8 @@ import {
   validateChurchSlug,
   extractChurchSlugFromPath,
   buildChurchPortalUrl,
+  buildChurchMemberPrefix,
+  computeNextChurchMemberNumber,
 } from './domain-logic';
 
 test('All church staff including Collector can manage single-use member share links; Member cannot', () => {
@@ -539,5 +541,30 @@ test('Church URL slug normalization, validation, path parsing, and portal URL ge
   assert.equal(
     buildChurchPortalUrl('https://church.example.com/', 'Grace Bethel'),
     'https://church.example.com/grace-bethel'
+  );
+});
+
+test('Church-code-prefixed new member IDs start at 1, use uppercase prefix, preserve legacy M-0001, and expand cleanly', () => {
+  assert.equal(buildChurchMemberPrefix(' abc '), 'ABC-');
+  assert.equal(computeNextChurchMemberNumber('abc', []), 'ABC-1');
+  assert.equal(
+    computeNextChurchMemberNumber('abc', ['M-0001', 'M-0002', 'M-0004']),
+    'ABC-1'
+  );
+  assert.equal(
+    computeNextChurchMemberNumber('abc', ['M-0001', 'ABC-1', 'abc-2']),
+    'ABC-3'
+  );
+  assert.equal(
+    computeNextChurchMemberNumber('GBC-CHN', ['M-0001', 'GBC-CHN-1']),
+    'GBC-CHN-2'
+  );
+  assert.equal(
+    computeNextChurchMemberNumber('M', ['M-0001', 'M-0002']),
+    'M-1'
+  );
+  assert.equal(
+    computeNextChurchMemberNumber('abc', ['ABC-9999']),
+    'ABC-10000'
   );
 });

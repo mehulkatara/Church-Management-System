@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase';
 import type { Church } from '../../types/database';
 import {
   buildAutoReceiptPrefix,
+  buildChurchMemberPrefix,
   buildChurchPortalUrl,
   normalizeChurchSlugInput,
   validateChurchSlug,
@@ -23,6 +24,7 @@ import {
   Save,
   AlertCircle,
   CheckCircle2,
+  Users,
 } from 'lucide-react';
 
 export const SettingsScreen: React.FC = () => {
@@ -54,6 +56,7 @@ export const SettingsScreen: React.FC = () => {
     slugInput || activeChurch?.slug || 'church'
   );
   const sampleAutoPrefix = buildAutoReceiptPrefix(activeChurch?.code, new Date());
+  const sampleMemberPrefix = buildChurchMemberPrefix(activeChurch?.code);
 
   const handleCopyUrl = async () => {
     if (!activeChurch) return;
@@ -222,6 +225,25 @@ export const SettingsScreen: React.FC = () => {
               <span className="truncate">{livePortalUrl}</span>
             </div>
           </form>
+        </div>
+
+        {/* Automatic Member ID Format (Read-only explanation) */}
+        <div className="pt-4 border-t border-slate-800 space-y-2">
+          <div className="flex items-center gap-2 text-white font-semibold">
+            <Users className="w-4 h-4 text-sky-400" />
+            <span>Automatic Member ID Series</span>
+          </div>
+          <p className="text-slate-400 text-[11px] leading-relaxed">
+            Newly created or approved members automatically receive sequential IDs prefixed with
+            your church code starting at 1. Existing historical member IDs remain unchanged, and your
+            church code is locked once members exist.
+          </p>
+          <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 font-mono text-sky-300 flex items-center justify-between gap-2">
+            <span>New Member ID Sequence</span>
+            <span className="font-semibold tabular-nums">
+              {sampleMemberPrefix}1, {sampleMemberPrefix}2, ...
+            </span>
+          </div>
         </div>
 
         {/* Automatic Receipt Format (Read-only explanation) */}
