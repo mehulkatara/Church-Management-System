@@ -6,9 +6,12 @@ import {
   buildAutoReceiptPrefix,
   buildChurchMemberPrefix,
   buildChurchPortalUrl,
+  formatIndianMobileInput,
+  normalizeChurchCodeInput,
   normalizeChurchSlugInput,
   suggestChurchSlug,
   validateChurchSlug,
+  validateNewChurchInput,
 } from '../../lib/domain-logic';
 import {
   getPreviewChurches,
@@ -42,6 +45,7 @@ export const ChurchManagementScreen: React.FC = () => {
   const [email, setEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [copiedChurchId, setCopiedChurchId] = useState<string | null>(null);
 
   // Edit Slug Modal State
@@ -82,26 +86,43 @@ export const ChurchManagementScreen: React.FC = () => {
     e.preventDefault();
     setIsSubmitting(true);
     setErrorMsg(null);
+    setFieldErrors({});
 
     try {
-      const slugCheck = validateChurchSlug(slug || suggestChurchSlug(name || code));
-      if (!slugCheck.valid) {
-        setErrorMsg(slugCheck.error || 'Please enter a valid URL slug.');
+      const targetSlug = slug || suggestChurchSlug(name || code);
+      const validation = validateNewChurchInput({
+        name,
+        code,
+        slug: targetSlug,
+        address,
+        phone,
+        email,
+      });
+
+      if (!validation.valid) {
+        setFieldErrors(validation.errors);
+        setErrorMsg(
+          Object.values(validation.errors)[0] || 'Please fill in all required church fields.'
+        );
         setIsSubmitting(false);
         return;
       }
 
-      const availability = await checkChurchSlugAvailability(slugCheck.normalized, null);
+      const availability = await checkChurchSlugAvailability(validation.normalized.slug, null);
       if (!availability.available) {
+        setFieldErrors({
+          slug: availability.reason || 'This URL slug is already in use.',
+        });
         setErrorMsg(availability.reason || 'This URL slug is already in use.');
         setIsSubmitting(false);
         return;
       }
 
       if (!supabase) {
-        const cleanCode = code.trim().toUpperCase();
+        const cleanCode = validation.normalized.code;
         const existing = getPreviewChurches();
         if (existing.some((c) => c.code.toUpperCase() === cleanCode)) {
+          setFieldErrors({ code: `Church code "${cleanCode}" already exists.` });
           throw new Error(`Church code "${cleanCode}" already exists.`);
         }
         const now = new Date().toISOString();
@@ -109,10 +130,10 @@ export const ChurchManagementScreen: React.FC = () => {
           id: `c-${Date.now()}`,
           code: cleanCode,
           slug: availability.normalizedSlug,
-          name: name.trim(),
-          address: address.trim() || null,
-          phone: phone.trim() || null,
-          email: email.trim() || null,
+          name: validation.normalized.name,
+          address: validation.normalized.address,
+          phone: validation.normalized.phone,
+          email: validation.normalized.email,
           is_active: true,
           created_at: now,
           updated_at: now,
@@ -124,12 +145,12 @@ export const ChurchManagementScreen: React.FC = () => {
         const { error } = await supabase
           .from('churches')
           .insert({
-            code: code.trim().toUpperCase(),
+            code: validation.normalized.code,
             slug: availability.normalizedSlug,
-            name: name.trim(),
-            address: address.trim() || null,
-            phone: phone.trim() || null,
-            email: email.trim() || null,
+            name: validation.normalized.name,
+            address: validation.normalized.address,
+            phone: validation.normalized.phone,
+            email: validation.normalized.email,
             is_active: true,
           })
           .select()
@@ -148,6 +169,7 @@ export const ChurchManagementScreen: React.FC = () => {
       setAddress('');
       setPhone('');
       setEmail('');
+      setFieldErrors({});
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to create church.');
     } finally {
@@ -228,8 +250,14 @@ export const ChurchManagementScreen: React.FC = () => {
         <button
           onClick={() => {
             setErrorMsg(null);
+            setFieldErrors({});
             setSlugManuallyEdited(false);
+            setCode('');
             setSlug('');
+            setName('');
+            setAddress('');
+            setPhone('');
+            setEmail('');
             setIsModalOpen(true);
           }}
           className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer"
@@ -356,9 +384,11 @@ export const ChurchManagementScreen: React.FC = () => {
                 {errorMsg}
               </div>
             )}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Church Name</label>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Church Name <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="text"
                   value={name}
@@ -368,29 +398,52 @@ export const ChurchManagementScreen: React.FC = () => {
                     if (!slugManuallyEdited) {
                       setSlug(suggestChurchSlug(nextName || code));
                     }
+                    if (fieldErrors.name) {
+                      setFieldErrors((prev) => ({ ...prev, name: '' }));
+                    }
                   }}
                   required
                   placeholder="e.g. Grace Bethel Church"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.name ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500`}
                 />
+                {fieldErrors.name && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.name}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Unique Church Code</label>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Unique Church Code <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="text"
                   value={code}
+                  maxLength={20}
                   onChange={(e) => {
-                    const nextCode = e.target.value;
+                    const nextCode = normalizeChurchCodeInput(e.target.value);
                     setCode(nextCode);
                     if (!slugManuallyEdited && !name.trim()) {
                       setSlug(suggestChurchSlug(nextCode));
                     }
+                    if (fieldErrors.code) {
+                      setFieldErrors((prev) => ({ ...prev, code: '' }));
+                    }
                   }}
                   required
                   placeholder="e.g. GBC-CHN"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono uppercase focus:outline-none focus:border-sky-500"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.code ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3 py-2 text-white font-mono uppercase focus:outline-none focus:border-sky-500`}
                 />
+                {fieldErrors.code ? (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.code}</p>
+                ) : (
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Letters, numbers, and - only (2&ndash;20 chars)
+                  </p>
+                )}
               </div>
             </div>
 
@@ -398,7 +451,11 @@ export const ChurchManagementScreen: React.FC = () => {
               <label className="block text-slate-300 font-medium mb-1">
                 Custom URL Slug <span className="text-red-400">*</span>
               </label>
-              <div className="flex items-stretch bg-slate-950 border border-slate-700 rounded-xl overflow-hidden focus-within:border-sky-500">
+              <div
+                className={`flex items-stretch bg-slate-950 border ${
+                  fieldErrors.slug ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl overflow-hidden focus-within:border-sky-500`}
+              >
                 <span className="px-3 py-2 bg-slate-900 border-r border-slate-800 text-slate-400 font-mono flex items-center select-none">
                   /
                 </span>
@@ -408,49 +465,99 @@ export const ChurchManagementScreen: React.FC = () => {
                   onChange={(e) => {
                     setSlugManuallyEdited(true);
                     setSlug(normalizeChurchSlugInput(e.target.value));
+                    if (fieldErrors.slug) {
+                      setFieldErrors((prev) => ({ ...prev, slug: '' }));
+                    }
                   }}
                   required
                   placeholder="e.g. grace-bethel"
                   className="flex-1 bg-transparent px-3 py-2 text-white font-mono focus:outline-none"
                 />
               </div>
-              <p className="text-[11px] text-slate-500 mt-1 font-mono truncate">
-                {buildChurchPortalUrl(origin, slug || 'church-slug')}
-              </p>
+              {fieldErrors.slug ? (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.slug}</p>
+              ) : (
+                <p className="text-[11px] text-slate-500 mt-1 font-mono truncate">
+                  {buildChurchPortalUrl(origin, slug || 'church-slug')}
+                </p>
+              )}
             </div>
 
             <div>
-              <label className="block text-slate-300 font-medium mb-1">Address</label>
+              <label className="block text-slate-300 font-medium mb-1">
+                Address <span className="text-red-400">*</span>
+              </label>
               <input
                 type="text"
                 value={address}
-                onChange={(e) => setAddress(e.target.value)}
+                onChange={(e) => {
+                  setAddress(e.target.value);
+                  if (fieldErrors.address) {
+                    setFieldErrors((prev) => ({ ...prev, address: '' }));
+                  }
+                }}
+                required
                 placeholder="Church street address, city, pin code"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500"
+                className={`w-full bg-slate-950 border ${
+                  fieldErrors.address ? 'border-red-500' : 'border-slate-700'
+                } rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500`}
               />
+              {fieldErrors.address && (
+                <p className="text-[11px] text-red-400 mt-1">{fieldErrors.address}</p>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Phone</label>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Phone <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={(e) => {
+                    setPhone(formatIndianMobileInput(e.target.value));
+                    if (fieldErrors.phone) {
+                      setFieldErrors((prev) => ({ ...prev, phone: '' }));
+                    }
+                  }}
+                  required
                   placeholder="9840012345"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-sky-500"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.phone ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3 py-2 text-white font-mono tabular-nums focus:outline-none focus:border-sky-500`}
                 />
+                {fieldErrors.phone ? (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.phone}</p>
+                ) : (
+                  <p className="text-[11px] text-slate-500 mt-1">10-digit Indian mobile number</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-slate-300 font-medium mb-1">Email</label>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Email <span className="text-red-400">*</span>
+                </label>
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (fieldErrors.email) {
+                      setFieldErrors((prev) => ({ ...prev, email: '' }));
+                    }
+                  }}
+                  required
                   placeholder="office@church.org"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500"
+                  className={`w-full bg-slate-950 border ${
+                    fieldErrors.email ? 'border-red-500' : 'border-slate-700'
+                  } rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500`}
                 />
+                {fieldErrors.email && (
+                  <p className="text-[11px] text-red-400 mt-1">{fieldErrors.email}</p>
+                )}
               </div>
             </div>
 

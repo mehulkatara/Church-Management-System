@@ -10,19 +10,15 @@ import {
   formatINR,
 } from '../../lib/domain-logic';
 import { checkReceiptAvailability } from '../../lib/receipt-availability';
+import { MemberSearchCombobox } from '../common/MemberSearchCombobox';
 import {
   Receipt,
-  User,
   Calendar,
   IndianRupee,
-  CreditCard,
-  Building2,
-  FileText,
   AlertCircle,
   CheckCircle2,
   MessageSquare,
   Copy,
-  Printer,
   RotateCcw,
   AlertTriangle,
 } from 'lucide-react';
@@ -45,7 +41,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const lockedPrefix = receiptBuild.prefix;
   const fullReceiptPreview = receiptBuild.valid ? receiptBuild.fullReceiptNumber : '';
 
-  const [selectedMemberId, setSelectedMemberId] = useState('');
+  const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [categoryId, setCategoryId] = useState('');
   const [amount, setAmount] = useState('500');
   const [receivingAccountId, setReceivingAccountId] = useState('');
@@ -54,10 +50,8 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const [notes, setNotes] = useState('');
 
   // Lookup data
-  const [members, setMembers] = useState<Member[]>([]);
   const [categories, setCategories] = useState<DonationCategory[]>([]);
   const [accounts, setAccounts] = useState<ReceivingAccount[]>([]);
-  const [memberSearch, setMemberSearch] = useState('');
   const [isLoadingLookups, setIsLoadingLookups] = useState(true);
 
   // Live duplicate receipt availability state
@@ -111,19 +105,12 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
   // Fetch church master data
   useEffect(() => {
+    setSelectedMember(null);
     if (!supabase || !activeChurch) return;
 
     const fetchLookups = async () => {
       setIsLoadingLookups(true);
       try {
-        // Members
-        const { data: memData } = await supabase
-          .from('members')
-          .select('*')
-          .eq('church_id', activeChurch.id)
-          .order('full_name');
-        if (memData) setMembers(memData as Member[]);
-
         // Active Categories
         const { data: catData } = await supabase
           .from('donation_categories')
@@ -157,20 +144,6 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     fetchLookups();
   }, [activeChurch]);
 
-  const selectedMember = members.find((m) => m.id === selectedMemberId);
-
-  // Filter members for selector
-  const filteredMembers = members.filter((m) => {
-    if (!memberSearch) return true;
-    const term = memberSearch.toLowerCase();
-    return (
-      m.full_name.toLowerCase().includes(term) ||
-      m.member_number.toLowerCase().includes(term) ||
-      (m.contact_phone && m.contact_phone.includes(term)) ||
-      (m.village_name && m.village_name.toLowerCase().includes(term))
-    );
-  });
-
   const handleCopy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopiedText(label);
@@ -197,8 +170,8 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       return;
     }
 
-    if (!selectedMemberId) {
-      setErrorMessage('Please select a member.');
+    if (!selectedMember) {
+      setErrorMessage('Please search and select a church member.');
       return;
     }
 
@@ -244,7 +217,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       // Call atomic record_donation RPC
       const { data, error } = await supabase.rpc('record_donation', {
         p_church_id: activeChurch.id,
-        p_member_id: selectedMemberId,
+        p_member_id: selectedMember.id,
         p_receipt_number: built.numericValue,
         p_donation_date: donationDate,
         p_category_id: categoryId,
@@ -273,15 +246,14 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       }
 
       // Success
-      const memberObj = members.find((m) => m.id === selectedMemberId);
       const catObj = categories.find((c) => c.id === categoryId);
 
       const savedInfo = {
         id: data?.id || 'new-donation',
         receiptNumber: data?.receipt_number || built.fullReceiptNumber,
         amount: parsedAmount,
-        memberName: memberObj?.full_name || 'Member',
-        memberPhone: memberObj?.contact_phone || null,
+        memberName: selectedMember.full_name || 'Member',
+        memberPhone: selectedMember.contact_phone || null,
         categoryName: catObj?.name || 'Tithe',
         donationDate: donationDate,
       };
@@ -307,6 +279,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
   const handleResetForNext = () => {
     setSavedDonation(null);
+    setSelectedMember(null);
     setReceiptDigits('');
     setAvailabilityState('idle');
     setAmount('500');
@@ -543,37 +516,27 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
           )}
         </div>
 
-        {/* 2. MEMBER SELECTOR & INACTIVE WARNING */}
+        {/* 2. UNIFIED LIVE MEMBER SEARCH & SELECTION COMBOBOX */}
         <div className="space-y-2">
-          <label htmlFor="member-search" className="block text-xs font-semibold text-white">
+          <label htmlFor="member-search-combobox" className="block text-xs font-semibold text-white">
             Church Member <span className="text-red-400">*</span>
           </label>
 
-          <div className="space-y-2">
-            <input
-              id="member-search"
-              type="text"
-              value={memberSearch}
-              onChange={(e) => setMemberSearch(e.target.value)}
-              placeholder="Search by name, member number, or village..."
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+          {activeChurch && (
+            <MemberSearchCombobox
+              inputId="member-search-combobox"
+              churchId={activeChurch.id}
+              selectedMember={selectedMember}
+              onSelectMember={(member) => {
+                setSelectedMember(member);
+                if (errorMessage === 'Please search and select a church member.') {
+                  setErrorMessage(null);
+                }
+              }}
+              onClearMember={() => setSelectedMember(null)}
+              disabled={isSubmitting}
             />
-
-            <select
-              value={selectedMemberId}
-              onChange={(e) => setSelectedMemberId(e.target.value)}
-              required
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500"
-            >
-              <option value="">-- Choose Member ({filteredMembers.length} available) --</option>
-              {filteredMembers.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.full_name} ({m.member_number}) {m.village_name ? `- ${m.village_name}` : ''}{' '}
-                  [{m.membership_status.toUpperCase()}]
-                </option>
-              ))}
-            </select>
-          </div>
+          )}
 
           {/* Non-blocking Inactive Member Notice */}
           {selectedMember && selectedMember.membership_status === 'inactive' && (

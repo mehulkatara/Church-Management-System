@@ -1135,3 +1135,161 @@ export function buildChurchPortalUrl(origin: string, slug: string): string {
   const cleanSlug = suggestChurchSlug(slug);
   return `${cleanOrigin}/${cleanSlug}`;
 }
+
+/**
+ * Sanitizes live input for a church code:
+ * - Auto-uppercases
+ * - Strips all characters other than A-Z, 0-9, and hyphen (-)
+ * - Collapses consecutive hyphens (--) and strips leading hyphens
+ * - Preserves a single trailing hyphen while typing, capped at 20 characters
+ */
+export function normalizeChurchCodeInput(value: string): string {
+  return (value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]+/g, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, 20);
+}
+
+/**
+ * Validates and finalizes a church code:
+ * - Uppercase letters (A-Z), digits (0-9), and single inner hyphens (-) only
+ * - 2 to 20 characters long (cannot start or end with a hyphen)
+ */
+export function validateChurchCode(raw: string | null | undefined): {
+  valid: boolean;
+  normalized: string;
+  error?: string;
+} {
+  const trimmed = (raw || '').trim().toUpperCase();
+  if (!trimmed) {
+    return { valid: false, normalized: '', error: 'Church code is required.' };
+  }
+  if (/[^A-Z0-9-]/.test(trimmed)) {
+    return {
+      valid: false,
+      normalized: normalizeChurchCodeInput(trimmed).replace(/-+$/, ''),
+      error: 'Church code may only contain letters, numbers, and hyphens (-).',
+    };
+  }
+  const normalized = trimmed.replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+  if (normalized.length < 2 || normalized.length > 20) {
+    return {
+      valid: false,
+      normalized,
+      error: 'Church code must be between 2 and 20 characters long.',
+    };
+  }
+  if (!/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/.test(normalized) || normalized !== trimmed) {
+    return {
+      valid: false,
+      normalized,
+      error: 'Use letters, numbers, and single inner hyphens (-) only.',
+    };
+  }
+  return { valid: true, normalized };
+}
+
+export interface NewChurchInput {
+  name: string;
+  code: string;
+  slug: string;
+  address: string;
+  phone: string;
+  email: string;
+}
+
+/**
+ * Validates all mandatory fields when creating a new church.
+ */
+export function validateNewChurchInput(input: NewChurchInput): {
+  valid: boolean;
+  errors: Record<string, string>;
+  normalized: {
+    name: string;
+    code: string;
+    slug: string;
+    address: string;
+    phone: string;
+    email: string;
+  };
+} {
+  const errors: Record<string, string> = {};
+
+  const name = (input.name || '').trim();
+  if (!name) {
+    errors.name = 'Church name is required.';
+  }
+
+  const codeCheck = validateChurchCode(input.code);
+  if (!codeCheck.valid) {
+    errors.code = codeCheck.error || 'Please enter a valid church code.';
+  }
+
+  const slugCheck = validateChurchSlug(input.slug);
+  if (!slugCheck.valid) {
+    errors.slug = slugCheck.error || 'Please enter a valid church URL slug.';
+  }
+
+  const address = (input.address || '').trim();
+  if (!address) {
+    errors.address = 'Church address is required.';
+  }
+
+  const phoneCheck = normalizePhoneNumber(input.phone);
+  if (!phoneCheck.valid) {
+    errors.phone = phoneCheck.error || 'Valid 10-digit Indian mobile number is required.';
+  }
+
+  const email = (input.email || '').trim().toLowerCase();
+  if (!email) {
+    errors.email = 'Church email address is required.';
+  } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errors.email = 'Please enter a valid email address.';
+  }
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    normalized: {
+      name,
+      code: codeCheck.normalized,
+      slug: slugCheck.normalized,
+      address,
+      phone: phoneCheck.valid ? phoneCheck.normalized : (input.phone || '').trim(),
+      email,
+    },
+  };
+}
+
+/**
+ * Sanitizes a live member search string for PostgREST `.or()` / `.ilike` queries.
+ * Removes PostgREST filter syntax delimiters and escapes SQL LIKE wildcards.
+ */
+export function sanitizeMemberSearchQuery(raw: string | null | undefined): string {
+  const cleaned = (raw || '')
+    .trim()
+    .replace(/[(),\"']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return '';
+
+  return cleaned
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_');
+}
+
+/**
+ * Builds a Supabase PostgREST `.or(...)` filter matching saved members by
+ * full_name, member_number, or village_name. Returns null when query is blank.
+ */
+export function buildMemberSearchOrFilter(raw: string | null | undefined): string | null {
+  const escaped = sanitizeMemberSearchQuery(raw);
+  if (!escaped) return null;
+  const pattern = `%${escaped}%`;
+  return `full_name.ilike.${pattern},member_number.ilike.${pattern},village_name.ilike.${pattern}`;
+}
+

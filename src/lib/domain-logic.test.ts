@@ -482,6 +482,11 @@ import {
   buildChurchPortalUrl,
   buildChurchMemberPrefix,
   computeNextChurchMemberNumber,
+  normalizeChurchCodeInput,
+  validateChurchCode,
+  validateNewChurchInput,
+  sanitizeMemberSearchQuery,
+  buildMemberSearchOrFilter,
 } from './domain-logic';
 
 test('All church staff including Collector can manage single-use member share links; Member cannot', () => {
@@ -568,3 +573,71 @@ test('Church-code-prefixed new member IDs start at 1, use uppercase prefix, pres
     'ABC-10000'
   );
 });
+
+test('New church creation requires all fields and restricts church code to A-Z, 0-9, and single inner hyphens', () => {
+  assert.equal(normalizeChurchCodeInput(' gbc@chn! 01 '), 'GBCCHN01');
+  assert.equal(normalizeChurchCodeInput('--gbc--chn_1'), 'GBC-CHN1');
+  assert.equal(normalizeChurchCodeInput('gbc-'), 'GBC-');
+
+  assert.equal(validateChurchCode('GBC-CHN').valid, true);
+  assert.equal(validateChurchCode('AB').valid, true);
+  assert.equal(validateChurchCode('A').valid, false);
+  assert.equal(validateChurchCode('GBC_CHN').valid, false);
+  assert.equal(validateChurchCode('GBC CHN').valid, false);
+  assert.equal(validateChurchCode('-GBC').valid, false);
+  assert.equal(validateChurchCode('GBC-').valid, false);
+  assert.equal(validateChurchCode('GBC--CHN').valid, false);
+  assert.equal(validateChurchCode('ABCDEFGHIJKLMNOPQRSTU').valid, false); // 21 chars
+
+  const invalidAll = validateNewChurchInput({
+    name: '   ',
+    code: 'a!',
+    slug: 'login',
+    address: '',
+    phone: '12345',
+    email: 'not-an-email',
+  });
+  assert.equal(invalidAll.valid, false);
+  assert.ok(invalidAll.errors.name);
+  assert.ok(invalidAll.errors.code);
+  assert.ok(invalidAll.errors.slug);
+  assert.ok(invalidAll.errors.address);
+  assert.ok(invalidAll.errors.phone);
+  assert.ok(invalidAll.errors.email);
+
+  const validChurch = validateNewChurchInput({
+    name: '  Grace Bethel Church  ',
+    code: 'gbc-chn',
+    slug: 'grace-bethel',
+    address: '  45 Anna Salai, Chennai  ',
+    phone: '+91 98400 12345',
+    email: '  Office@GraceBethel.ORG ',
+  });
+  assert.equal(validChurch.valid, true);
+  assert.deepEqual(validChurch.normalized, {
+    name: 'Grace Bethel Church',
+    code: 'GBC-CHN',
+    slug: 'grace-bethel',
+    address: '45 Anna Salai, Chennai',
+    phone: '9840012345',
+    email: 'office@gracebethel.org',
+  });
+});
+
+test('Live member search query sanitization and PostgREST OR filter handle blank, special characters, and codes safely', () => {
+  assert.equal(sanitizeMemberSearchQuery('   '), '');
+  assert.equal(sanitizeMemberSearchQuery(null), '');
+  assert.equal(sanitizeMemberSearchQuery('  Mary, (Jane)  '), 'Mary Jane');
+  assert.equal(sanitizeMemberSearchQuery('100%_test\\path'), '100\\%\\_test\\\\path');
+
+  assert.equal(buildMemberSearchOrFilter('   '), null);
+  assert.equal(
+    buildMemberSearchOrFilter('ABC-12'),
+    'full_name.ilike.%ABC-12%,member_number.ilike.%ABC-12%,village_name.ilike.%ABC-12%'
+  );
+  assert.equal(
+    buildMemberSearchOrFilter('Mary, (Nellore)'),
+    'full_name.ilike.%Mary Nellore%,member_number.ilike.%Mary Nellore%,village_name.ilike.%Mary Nellore%'
+  );
+});
+
