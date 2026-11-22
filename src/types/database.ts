@@ -108,7 +108,7 @@ export interface DonationCategory {
   id: string;
   church_id: string;
   name: string;
-  code: string;
+  code?: string | null;
   is_active: boolean;
   created_at: string;
 }

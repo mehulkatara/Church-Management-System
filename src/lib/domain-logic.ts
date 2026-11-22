@@ -288,20 +288,23 @@ export interface DonorRankedOutput extends DonorRankingInput {
 
 /**
  * Standard competition ranking (1, 2, 2, 4).
- * Inactive members' valid donations are included in totals and ranking.
+ * Active church members only are included in leaderboard rankings.
  * Ranking ties depend on total amount only.
  * Secondary stable ordering by memberName then memberId for consistent display.
  */
 export function calculateRankings(donors: DonorRankingInput[]): DonorRankedOutput[] {
-  // Sort primarily by totalAmount descending, secondarily by memberName ascending, then memberId
-  const sorted = [...donors].sort((a, b) => {
-    if (b.totalAmount !== a.totalAmount) {
-      return b.totalAmount - a.totalAmount;
-    }
-    const nameDiff = a.memberName.localeCompare(b.memberName);
-    if (nameDiff !== 0) return nameDiff;
-    return a.memberId.localeCompare(b.memberId);
-  });
+  // Include active members only, then sort primarily by totalAmount descending,
+  // secondarily by memberName ascending, then memberId
+  const sorted = donors
+    .filter((d) => d.isActive)
+    .sort((a, b) => {
+      if (b.totalAmount !== a.totalAmount) {
+        return b.totalAmount - a.totalAmount;
+      }
+      const nameDiff = a.memberName.localeCompare(b.memberName);
+      if (nameDiff !== 0) return nameDiff;
+      return a.memberId.localeCompare(b.memberId);
+    });
 
   const ranked: DonorRankedOutput[] = [];
   let currentRank = 1;

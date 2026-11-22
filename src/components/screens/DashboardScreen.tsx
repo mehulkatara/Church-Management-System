@@ -116,9 +116,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
             if (allFyDonations) {
               const donorTotals = new Map<string, any>();
               for (const d of allFyDonations) {
+                const memberInfo = d.member as any;
+                const isMemberActive = memberInfo?.membership_status === 'active';
+                if (!isMemberActive) continue;
+
                 const existing = donorTotals.get(d.member_id) || {
                   memberId: d.member_id,
-                  memberName: (d.member as any)?.full_name || 'Member',
+                  memberName: memberInfo?.full_name || 'Member',
                   totalAmount: 0,
                   isActive: true,
                 };
@@ -190,16 +194,28 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
           </div>
 
           {/* Members */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
             <span className="text-[11px] text-slate-400 uppercase font-mono tracking-wider block">
               Church Members
             </span>
-            <div className="text-2xl font-bold text-white">
-              {activeMemberCount} <span className="text-xs font-normal text-slate-400">Active</span>
+            <div className="grid grid-cols-2 divide-x divide-slate-800">
+              <div className="pr-3">
+                <div className="text-2xl font-bold font-mono tabular-nums text-emerald-400">
+                  {activeMemberCount}
+                </div>
+                <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
+                  Active
+                </span>
+              </div>
+              <div className="pl-3">
+                <div className="text-2xl font-bold font-mono tabular-nums text-slate-300">
+                  {inactiveMemberCount}
+                </div>
+                <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
+                  Inactive
+                </span>
+              </div>
             </div>
-            <span className="text-[11px] text-slate-500 font-mono block">
-              {inactiveMemberCount} inactive (history preserved)
-            </span>
           </div>
 
           {/* Pending Approvals */}

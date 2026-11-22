@@ -15,7 +15,6 @@ export const CategoriesScreen: React.FC = () => {
   // Category Modal
   const [isCatModalOpen, setIsCatModalOpen] = useState(false);
   const [catName, setCatName] = useState('');
-  const [catCode, setCatCode] = useState('');
 
   // Account Modal
   const [isAccModalOpen, setIsAccModalOpen] = useState(false);
@@ -63,11 +62,9 @@ export const CategoriesScreen: React.FC = () => {
     setErrorMsg(null);
 
     try {
-      const code = catCode.trim().toUpperCase() || catName.trim().toUpperCase().replace(/\s+/g, '_');
       const { error } = await supabase.from('donation_categories').insert({
         church_id: activeChurch.id,
         name: catName.trim(),
-        code,
         is_active: true,
       });
 
@@ -75,7 +72,6 @@ export const CategoriesScreen: React.FC = () => {
 
       setIsCatModalOpen(false);
       setCatName('');
-      setCatCode('');
       await fetchData();
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to add category.');
@@ -164,7 +160,6 @@ export const CategoriesScreen: React.FC = () => {
             <thead>
               <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-medium">
                 <th className="py-2.5 px-4">Category Name</th>
-                <th className="py-2.5 px-4 font-mono">Code</th>
                 <th className="py-2.5 px-4 text-center">Status</th>
                 <th className="py-2.5 px-4 text-right">Actions</th>
               </tr>
@@ -173,7 +168,6 @@ export const CategoriesScreen: React.FC = () => {
               {categories.map((c) => (
                 <tr key={c.id} className="hover:bg-slate-800/40">
                   <td className="py-2.5 px-4 font-semibold text-white">{c.name}</td>
-                  <td className="py-2.5 px-4 font-mono text-sky-400">{c.code}</td>
                   <td className="py-2.5 px-4 text-center">
                     <span
                       className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
@@ -293,18 +287,6 @@ export const CategoriesScreen: React.FC = () => {
                 required
                 placeholder="e.g. Building Fund"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500"
-              />
-            </div>
-            <div>
-              <label className="block text-slate-300 font-medium mb-1">
-                Category Code <span className="text-slate-400 font-normal">(Optional)</span>
-              </label>
-              <input
-                type="text"
-                value={catCode}
-                onChange={(e) => setCatCode(e.target.value)}
-                placeholder="e.g. BLDG_FUND"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono uppercase focus:outline-none focus:border-sky-500"
               />
             </div>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">

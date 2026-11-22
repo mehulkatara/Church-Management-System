@@ -117,7 +117,7 @@ const MainAppContent: React.FC<{
       case 'dashboard':
         return <DashboardScreen onNavigate={setCurrentScreen} />;
       case 'record_donation':
-        return <RecordDonationScreen onDonationSaved={() => setCurrentScreen('donations')} />;
+        return <RecordDonationScreen />;
       case 'donations':
         return <DonationsScreen />;
       case 'members':

@@ -65,21 +65,21 @@ export const LeaderboardScreen: React.FC = () => {
             member_number: string;
             membership_status: string;
           } | null;
-          if (!m) continue;
+          if (!m || m.membership_status !== 'active') continue;
 
           const existing = memberTotalsMap.get(m.id) || {
             memberId: m.id,
             memberName: m.full_name,
             memberNumber: m.member_number,
             totalAmount: 0,
-            isActive: m.membership_status === 'active',
+            isActive: true,
           };
 
           existing.totalAmount += Number(d.amount);
           memberTotalsMap.set(m.id, existing);
         }
 
-        // Compute competition ranking (1, 2, 2, 4)
+        // Compute competition ranking (1, 2, 2, 4) across active members only
         const computed = calculateRankings(Array.from(memberTotalsMap.values()));
         setRankings(computed);
       } catch (err) {
@@ -192,11 +192,11 @@ export const LeaderboardScreen: React.FC = () => {
               Top Contributors ({currentFyInfo.label})
             </h3>
             <span className="text-[10px] text-slate-500">
-              Competition ranking (1, 2, 2, 4). Includes valid non-deleted donations.
+              Competition ranking (1, 2, 2, 4). Active members only.
             </span>
           </div>
           <span className="text-[11px] text-slate-400 font-mono tabular-nums">
-            {rankings.length} Qualifying Donors
+            {rankings.length} Active Donors
           </span>
         </div>
 
@@ -205,7 +205,7 @@ export const LeaderboardScreen: React.FC = () => {
             <div className="py-8 text-center text-slate-500">Calculating rankings...</div>
           ) : top10.length === 0 ? (
             <div className="py-8 text-center text-slate-500">
-              No donations recorded for {currentFyInfo.label} yet.
+              No active member donations recorded for {currentFyInfo.label} yet.
             </div>
           ) : (
             top10.map((donor) => {
@@ -225,11 +225,6 @@ export const LeaderboardScreen: React.FC = () => {
                         {isSelf && (
                           <span className="text-sky-300 font-medium">
                             &middot; You
-                          </span>
-                        )}
-                        {!donor.isActive && (
-                          <span className="text-slate-400">
-                            &middot; Historical
                           </span>
                         )}
                       </div>

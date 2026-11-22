@@ -94,27 +94,31 @@ test('Automatic receipt prefix uses church code and financial year from donation
   assert.equal(extractReceiptSuffixDigits('REC-0055'), '55');
 });
 
-test('Competition ranking logic: 1, 2, 2, 4 ties and inactive member inclusion', () => {
+test('Competition ranking logic: 1, 2, 2, 4 ties and active-only member filtering', () => {
   const donors = [
     { memberId: 'm1', memberName: 'Alice', totalAmount: 5000, isActive: true },
-    { memberId: 'm2', memberName: 'Bob', totalAmount: 3000, isActive: false }, // Inactive member
-    { memberId: 'm3', memberName: 'Charlie', totalAmount: 3000, isActive: true }, // Tied with Bob
-    { memberId: 'm4', memberName: 'David', totalAmount: 1000, isActive: true },
+    { memberId: 'm2', memberName: 'Bob', totalAmount: 4000, isActive: false }, // Inactive member excluded
+    { memberId: 'm3', memberName: 'Charlie', totalAmount: 3000, isActive: true },
+    { memberId: 'm4', memberName: 'David', totalAmount: 3000, isActive: true }, // Tied with Charlie
+    { memberId: 'm5', memberName: 'Eve', totalAmount: 1000, isActive: true },
   ];
 
   const ranked = calculateRankings(donors);
+  assert.equal(ranked.length, 4);
+  assert.equal(ranked.some((r) => r.memberId === 'm2'), false);
+
   // Rank 1: Alice (5000)
   assert.equal(ranked[0].memberId, 'm1');
   assert.equal(ranked[0].rank, 1);
 
-  // Ranks 2 & 2: Bob (3000) and Charlie (3000)
+  // Ranks 2 & 2: Charlie (3000) and David (3000)
+  assert.equal(ranked[1].memberId, 'm3');
   assert.equal(ranked[1].rank, 2);
+  assert.equal(ranked[2].memberId, 'm4');
   assert.equal(ranked[2].rank, 2);
-  assert.equal(ranked[1].totalAmount, 3000);
-  assert.equal(ranked[2].totalAmount, 3000);
 
-  // Rank 4 (competition ranking jumps over 3): David (1000)
-  assert.equal(ranked[3].memberId, 'm4');
+  // Rank 4 (competition ranking jumps over 3): Eve (1000)
+  assert.equal(ranked[3].memberId, 'm5');
   assert.equal(ranked[3].rank, 4);
 });
 

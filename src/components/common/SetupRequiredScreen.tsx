@@ -357,6 +357,7 @@ WHERE email = 'admin@yourchurch.org';`}
                 <p>6. 20261118000001_root_church_slug_and_expired_link_redirect.sql &mdash; Root-level /&lt;slug&gt; route guards &amp; expired link church sign-in metadata</p>
                 <p>7. 20261121000001_church_code_member_numbers.sql &mdash; Church-code-prefixed new member IDs (&lt;CODE&gt;-1, ...) &amp; church code lock</p>
                 <p>8. 20261121000002_strict_church_creation_fields_and_code.sql &mdash; Mandatory church creation fields &amp; strict A&ndash;Z/0&ndash;9/- church code validation</p>
+                <p>9. 20261121000003_category_code_optional_and_active_leaderboard.sql &mdash; Remove category code DB requirement &amp; active-only member portal leaderboard</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">

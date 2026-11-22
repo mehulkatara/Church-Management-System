@@ -240,10 +240,9 @@ CREATE TABLE IF NOT EXISTS public.donation_categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    code TEXT NOT NULL,
+    code TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    CONSTRAINT uq_church_category_code UNIQUE (church_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
 -- 9. RECEIVING ACCOUNTS
@@ -3239,6 +3238,7 @@ BEGIN
         JOIN public.members m ON m.id = d.member_id AND m.church_id = d.church_id
         WHERE d.church_id = v_link.church_id
           AND d.deleted_at IS NULL
+          AND m.membership_status = 'active'
     ),
     fy_totals AS (
         SELECT

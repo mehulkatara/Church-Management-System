@@ -605,7 +605,7 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
                   <span>Church Leaderboard</span>
                 </h2>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  FY {selectedFy} standings
+                  FY {selectedFy} standings &middot; Active members only
                 </p>
               </div>
             </div>
