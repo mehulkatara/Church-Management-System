@@ -521,11 +521,11 @@ export const TermsOfServicePage: React.FC<PublicPageProps> = ({
               3. Accuracy of Records &amp; Receipt Integrity
             </h2>
             <p>
-              Users and church staff are responsible for providing accurate information. Manual
-              receipt numbers are permanently reserved per church to maintain financial auditability.
-              Unauthorized alteration, falsification of donation receipts, or attempts to bypass
-              church isolation controls are strictly prohibited and may result in immediate
-              revocation of access.
+              Users and church staff are responsible for providing accurate information. Active
+              receipt numbers must be unique per church, and all donation creations, corrections, and
+              cancellations are recorded in immutable revision and audit logs. Unauthorized alteration,
+              falsification of donation receipts, or attempts to bypass church isolation controls are
+              strictly prohibited and may result in immediate revocation of access.
             </p>
           </section>
 

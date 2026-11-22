@@ -240,6 +240,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       if (error) {
         if (
           error.message.includes('already exists') ||
+          error.message.includes('uq_donations_active_receipt') ||
           error.message.includes('uq_church_normalized_receipt')
         ) {
           setAvailabilityState('duplicate');
@@ -284,7 +285,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to save donation.';
-      if (msg.includes('already exists')) {
+      if (msg.includes('already exists') || msg.includes('uq_donations_active_receipt')) {
         setAvailabilityState('duplicate');
         setErrorMessage(
           `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
@@ -350,7 +351,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
               Donation Recorded Successfully!
             </h2>
             <p className="text-xs text-slate-400">
-              Receipt permanently reserved in church registry.
+              Receipt saved in church donation registry.
             </p>
           </div>
 
@@ -555,7 +556,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
           {availabilityState === 'duplicate' && (
             <p className="text-[11px] text-red-400 flex items-center gap-1.5 font-mono tabular-nums">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              <span>Duplicate receipt: {fullReceiptPreview} is already registered.</span>
+              <span>Duplicate receipt: {fullReceiptPreview} is already in use by an active donation.</span>
             </p>
           )}
           {availabilityState === 'idle' && (
@@ -740,7 +741,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
             className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-sky-600/20 text-xs sm:text-sm"
           >
             <Receipt className="w-4 h-4" />
-            <span>{isSubmitting ? 'Reserving Receipt & Saving...' : 'Save & Issue Receipt'}</span>
+            <span>{isSubmitting ? 'Validating & Saving...' : 'Save & Issue Receipt'}</span>
           </button>
         </div>
       </form>

@@ -3,12 +3,12 @@
 -- File: supabase/complete_schema.sql
 -- Note: Incremental deployment migrations are maintained separately per change in
 --       supabase/migrations/*.sql. This file always mirrors the latest complete
---       schema (currently 20 tables, RLS policies, triggers, and RPCs).
+--       schema (currently 19 tables, RLS policies, triggers, and RPCs).
 -- WARNING: DESTRUCTIVE RESET!
 -- Running this script deletes ALL existing tables, views, functions, triggers,
 -- policies, and data in the `public` schema, then recreates everything cleanly:
 --   0. Drops existing trigger on auth.users and all non-extension public objects
---   1. Creates all 20 tables, constraints, and indexes
+--   1. Creates all 19 tables, constraints, and indexes
 --   2. Creates auth.users -> public.profiles sync trigger
 --   3. Enables Row Level Security (RLS) on ALL 19 tables + complete policies
 --   4. Installs deterministic role helper functions
@@ -283,22 +283,11 @@ CREATE TABLE IF NOT EXISTS public.donations (
 CREATE INDEX IF NOT EXISTS idx_donations_church_date ON public.donations(church_id, donation_date);
 CREATE INDEX IF NOT EXISTS idx_donations_member ON public.donations(member_id);
 CREATE INDEX IF NOT EXISTS idx_donations_active ON public.donations(church_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_donations_active_receipt
+    ON public.donations (church_id, lower(trim(receipt_number)))
+    WHERE deleted_at IS NULL;
 
--- 11. RECEIPT NUMBER REGISTRY (Permanent reservation within church)
-CREATE TABLE IF NOT EXISTS public.receipt_number_registry (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE RESTRICT,
-    normalized_receipt_number TEXT NOT NULL,
-    original_receipt_number TEXT NOT NULL,
-    donation_id UUID NOT NULL REFERENCES public.donations(id) ON DELETE RESTRICT,
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cancelled', 'corrected_old')),
-    reserved_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
-    reserved_by UUID REFERENCES auth.users(id),
-    CONSTRAINT uq_church_normalized_receipt UNIQUE (church_id, normalized_receipt_number)
-);
-CREATE INDEX IF NOT EXISTS idx_receipt_registry_lookup ON public.receipt_number_registry(church_id, normalized_receipt_number);
-
--- 12. DONATION REVISIONS (Append-only history of creations, corrections, and cancellations)
+-- 11. DONATION REVISIONS (Append-only history of creations, corrections, and cancellations)
 CREATE TABLE IF NOT EXISTS public.donation_revisions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     donation_id UUID NOT NULL REFERENCES public.donations(id) ON DELETE RESTRICT,
@@ -721,7 +710,7 @@ CREATE TRIGGER trg_assign_church_member_number
     FOR EACH ROW EXECUTE FUNCTION public.assign_church_member_number();
 
 -- ==============================================================================
--- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 20 TABLES
+-- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 19 TABLES
 -- ==============================================================================
 
 ALTER TABLE public.churches ENABLE ROW LEVEL SECURITY;
@@ -734,7 +723,6 @@ ALTER TABLE public.access_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.donation_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.receiving_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.donations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.receipt_number_registry ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.donation_revisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.church_settings ENABLE ROW LEVEL SECURITY;
@@ -786,7 +774,7 @@ $$;
 
 -- ==============================================================================
 -- SECTION 5: RLS POLICIES
--- Note: receipt_number_registry, notification_attempts, and report_exports
+-- Note: notification_attempts and report_exports
 -- intentionally have ZERO direct client policies (accessed only via SECURITY DEFINER RPCs / service role).
 -- ==============================================================================
 
@@ -1191,16 +1179,17 @@ BEGIN
     END IF;
 
     v_canonical := public.normalize_auto_receipt_number(v_church_code, p_donation_date, p_receipt_number);
-    v_normalized := lower(v_canonical);
+    v_normalized := lower(trim(v_canonical));
 
     SELECT EXISTS (
         SELECT 1
-        FROM public.receipt_number_registry r
-        WHERE r.church_id = p_church_id
-          AND r.normalized_receipt_number = v_normalized
+        FROM public.donations d
+        WHERE d.church_id = p_church_id
+          AND d.deleted_at IS NULL
+          AND lower(trim(d.receipt_number)) = v_normalized
           AND (
               p_exclude_donation_id IS NULL
-              OR NOT (r.donation_id = p_exclude_donation_id AND r.status = 'active')
+              OR d.id <> p_exclude_donation_id
           )
     ) INTO v_conflict;
 
@@ -1214,7 +1203,7 @@ $$;
 REVOKE ALL ON FUNCTION public.check_receipt_number_availability(UUID, DATE, TEXT, UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.check_receipt_number_availability(UUID, DATE, TEXT, UUID) TO authenticated;
 
--- 1. RECORD DONATION (Atomic transaction with auto church-code + FY prefix & receipt reservation)
+-- 1. RECORD DONATION (Atomic transaction with auto church-code + FY prefix & active receipt uniqueness)
 CREATE OR REPLACE FUNCTION public.record_donation(
     p_church_id UUID,
     p_member_id UUID,
@@ -1289,7 +1278,7 @@ BEGIN
     END IF;
 
     v_canonical_receipt := public.normalize_auto_receipt_number(v_church_code, p_donation_date, p_receipt_number);
-    v_normalized_receipt := lower(v_canonical_receipt);
+    v_normalized_receipt := lower(trim(v_canonical_receipt));
 
     SELECT church_id, full_name INTO v_member_church_id, v_member_name
     FROM public.members WHERE id = p_member_id;
@@ -1319,58 +1308,52 @@ BEGIN
     END IF;
 
     IF EXISTS (
-        SELECT 1 FROM public.receipt_number_registry
-        WHERE church_id = p_church_id AND normalized_receipt_number = v_normalized_receipt
+        SELECT 1 FROM public.donations d
+        WHERE d.church_id = p_church_id
+          AND d.deleted_at IS NULL
+          AND lower(trim(d.receipt_number)) = v_normalized_receipt
     ) THEN
         RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_canonical_receipt;
     END IF;
 
-    INSERT INTO public.donations (
-        church_id,
-        member_id,
-        receipt_number,
-        donation_date,
-        category_id,
-        amount,
-        receiving_account_id,
-        payment_method,
-        payment_reference,
-        notes,
-        idempotency_key,
-        created_by,
-        updated_by
-    ) VALUES (
-        p_church_id,
-        p_member_id,
-        v_canonical_receipt,
-        p_donation_date,
-        p_category_id,
-        p_amount,
-        p_receiving_account_id,
-        p_payment_method,
-        trim(p_payment_reference),
-        trim(p_notes),
-        p_idempotency_key,
-        v_actor_id,
-        v_actor_id
-    )
-    RETURNING id INTO v_donation_id;
-
-    INSERT INTO public.receipt_number_registry (
-        church_id,
-        normalized_receipt_number,
-        original_receipt_number,
-        donation_id,
-        status,
-        reserved_by
-    ) VALUES (
-        p_church_id,
-        v_normalized_receipt,
-        v_canonical_receipt,
-        v_donation_id,
-        'active',
-        v_actor_id
-    );
+    BEGIN
+        INSERT INTO public.donations (
+            church_id,
+            member_id,
+            receipt_number,
+            donation_date,
+            category_id,
+            amount,
+            receiving_account_id,
+            payment_method,
+            payment_reference,
+            notes,
+            idempotency_key,
+            created_by,
+            updated_by
+        ) VALUES (
+            p_church_id,
+            p_member_id,
+            v_canonical_receipt,
+            p_donation_date,
+            p_category_id,
+            p_amount,
+            p_receiving_account_id,
+            p_payment_method,
+            trim(p_payment_reference),
+            trim(p_notes),
+            p_idempotency_key,
+            v_actor_id,
+            v_actor_id
+        )
+        RETURNING id INTO v_donation_id;
+    EXCEPTION
+        WHEN unique_violation THEN
+            IF SQLERRM ILIKE '%uq_donations_active_receipt%' THEN
+                RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_canonical_receipt;
+            END IF;
+            RAISE;
+    END;
 
     SELECT * INTO v_new_donation FROM public.donations WHERE id = v_donation_id;
 
@@ -1445,6 +1428,8 @@ DECLARE
     v_church_id UUID;
     v_church_code TEXT;
     v_role TEXT;
+    v_cat_church_id UUID;
+    v_acc_church_id UUID;
     v_next_revision INT;
     v_old_norm_receipt TEXT;
     v_new_canonical_receipt TEXT;
@@ -1456,6 +1441,10 @@ BEGIN
 
     IF p_reason IS NULL OR length(trim(p_reason)) < 3 THEN
         RAISE EXCEPTION 'A clear reason is required to correct a saved donation.';
+    END IF;
+
+    IF p_new_amount <= 0 THEN
+        RAISE EXCEPTION 'Donation amount must be greater than zero.';
     END IF;
 
     SELECT * INTO v_old_donation FROM public.donations WHERE id = p_donation_id;
@@ -1483,53 +1472,56 @@ BEGIN
         RAISE EXCEPTION 'Church not found.';
     END IF;
 
+    SELECT church_id INTO v_cat_church_id
+    FROM public.donation_categories WHERE id = p_new_category_id;
+    IF v_cat_church_id IS NULL OR v_cat_church_id <> v_church_id THEN
+        RAISE EXCEPTION 'Invalid category: Category does not belong to this church.';
+    END IF;
+
+    SELECT church_id INTO v_acc_church_id
+    FROM public.receiving_accounts WHERE id = p_new_receiving_account_id;
+    IF v_acc_church_id IS NULL OR v_acc_church_id <> v_church_id THEN
+        RAISE EXCEPTION 'Invalid receiving account: Account does not belong to this church.';
+    END IF;
+
     v_new_canonical_receipt := public.normalize_auto_receipt_number(v_church_code, p_new_donation_date, p_new_receipt_number);
     v_old_norm_receipt := lower(trim(v_old_donation.receipt_number));
-    v_new_norm_receipt := lower(v_new_canonical_receipt);
+    v_new_norm_receipt := lower(trim(v_new_canonical_receipt));
 
     IF v_old_norm_receipt <> v_new_norm_receipt THEN
         IF EXISTS (
-            SELECT 1 FROM public.receipt_number_registry
-            WHERE church_id = v_church_id AND normalized_receipt_number = v_new_norm_receipt
+            SELECT 1 FROM public.donations d
+            WHERE d.church_id = v_church_id
+              AND d.deleted_at IS NULL
+              AND d.id <> p_donation_id
+              AND lower(trim(d.receipt_number)) = v_new_norm_receipt
         ) THEN
             RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_new_canonical_receipt;
         END IF;
-
-        UPDATE public.receipt_number_registry
-        SET status = 'corrected_old'
-        WHERE church_id = v_church_id AND normalized_receipt_number = v_old_norm_receipt;
-
-        INSERT INTO public.receipt_number_registry (
-            church_id,
-            normalized_receipt_number,
-            original_receipt_number,
-            donation_id,
-            status,
-            reserved_by
-        ) VALUES (
-            v_church_id,
-            v_new_norm_receipt,
-            v_new_canonical_receipt,
-            p_donation_id,
-            'active',
-            v_actor_id
-        );
     END IF;
 
-    UPDATE public.donations
-    SET
-        receipt_number = v_new_canonical_receipt,
-        amount = p_new_amount,
-        category_id = p_new_category_id,
-        receiving_account_id = p_new_receiving_account_id,
-        donation_date = p_new_donation_date,
-        payment_method = p_new_payment_method,
-        payment_reference = trim(p_new_payment_reference),
-        notes = trim(p_new_notes),
-        updated_at = timezone('utc'::text, now()),
-        updated_by = v_actor_id
-    WHERE id = p_donation_id
-    RETURNING * INTO v_new_donation;
+    BEGIN
+        UPDATE public.donations
+        SET
+            receipt_number = v_new_canonical_receipt,
+            amount = p_new_amount,
+            category_id = p_new_category_id,
+            receiving_account_id = p_new_receiving_account_id,
+            donation_date = p_new_donation_date,
+            payment_method = p_new_payment_method,
+            payment_reference = trim(p_new_payment_reference),
+            notes = trim(p_new_notes),
+            updated_at = timezone('utc'::text, now()),
+            updated_by = v_actor_id
+        WHERE id = p_donation_id
+        RETURNING * INTO v_new_donation;
+    EXCEPTION
+        WHEN unique_violation THEN
+            IF SQLERRM ILIKE '%uq_donations_active_receipt%' THEN
+                RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_new_canonical_receipt;
+            END IF;
+            RAISE;
+    END;
 
     SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
     FROM public.donation_revisions WHERE donation_id = p_donation_id;
@@ -1580,7 +1572,7 @@ BEGIN
 END;
 $$;
 
--- 3. CANCEL / SOFT-DELETE DONATION (Admin or Accountant only; permanent reservation remains)
+-- 3. CANCEL / SOFT-DELETE DONATION (Admin or Accountant only; frees receipt number for reuse)
 CREATE OR REPLACE FUNCTION public.cancel_donation(
     p_donation_id UUID,
     p_reason TEXT
@@ -1633,10 +1625,6 @@ BEGIN
         deletion_reason = trim(p_reason)
     WHERE id = p_donation_id
     RETURNING * INTO v_new_donation;
-
-    UPDATE public.receipt_number_registry
-    SET status = 'cancelled'
-    WHERE donation_id = p_donation_id;
 
     SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
     FROM public.donation_revisions WHERE donation_id = p_donation_id;

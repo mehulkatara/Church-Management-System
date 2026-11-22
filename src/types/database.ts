@@ -8,7 +8,6 @@ export type AccessStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'retu
 export type Gender = 'male' | 'female' | 'other' | 'prefer_not_to_say';
 export type PaymentMethod = 'Cash' | 'UPI' | 'Bank Transfer' | 'Cheque' | 'Other';
 export type AccountType = 'cash' | 'bank';
-export type ReceiptStatus = 'active' | 'cancelled' | 'corrected_old';
 export type RevisionType = 'created' | 'corrected' | 'cancelled';
 export type SmsJobStatus = 'not_configured' | 'queued' | 'submitted' | 'delivered' | 'failed' | 'unknown';
 
@@ -147,17 +146,6 @@ export interface Donation {
   member?: Member;
   category?: DonationCategory;
   receiving_account?: ReceivingAccount;
-}
-
-export interface ReceiptRegistryEntry {
-  id: string;
-  church_id: string;
-  normalized_receipt_number: string;
-  original_receipt_number: string;
-  donation_id: string;
-  status: ReceiptStatus;
-  reserved_at: string;
-  reserved_by: string | null;
 }
 
 export interface DonationRevision {

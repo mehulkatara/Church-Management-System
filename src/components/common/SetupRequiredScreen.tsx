@@ -359,14 +359,15 @@ WHERE email = 'admin@yourchurch.org';`}
                 <p>8. 20261121000002_strict_church_creation_fields_and_code.sql &mdash; Mandatory church creation fields &amp; strict A&ndash;Z/0&ndash;9/- church code validation</p>
                 <p>9. 20261121000003_category_code_optional_and_active_leaderboard.sql &mdash; Remove category code DB requirement &amp; active-only member portal leaderboard</p>
                 <p>10. 20261121000004_android_sms_gateway_plan_b.sql &mdash; Plan B Android SMS Gateway credential store &amp; secure RPCs</p>
+                <p>11. 20261122000001_merge_receipt_registry_into_donations.sql &mdash; Merge receipt_number_registry into donations (active receipt index; reuse corrected/cancelled receipts)</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- All 20 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
+                <p className="text-sky-400">-- All 19 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
                 <p>member_share_links, access_requests, donation_categories, receiving_accounts, donations,</p>
-                <p>receipt_number_registry, donation_revisions, audit_logs, church_settings, church_sms_gateways,</p>
-                <p>notifications, notification_jobs, notification_attempts, report_exports</p>
+                <p>donation_revisions, audit_logs, church_settings, church_sms_gateways, notifications,</p>
+                <p>notification_jobs, notification_attempts, report_exports</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">

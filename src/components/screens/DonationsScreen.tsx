@@ -264,7 +264,24 @@ export const DonationsScreen: React.FC = () => {
       setSelectedDonation(null);
       await fetchDonations();
     } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : 'Correction failed.');
+      const msg =
+        err instanceof Error
+          ? err.message
+          : err && typeof err === 'object' && 'message' in err
+            ? String((err as { message: unknown }).message)
+            : 'Correction failed.';
+      if (
+        msg.includes('already exists') ||
+        msg.includes('uq_donations_active_receipt') ||
+        msg.includes('uq_church_normalized_receipt')
+      ) {
+        setEditAvailability('duplicate');
+        setActionError(
+          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
+        );
+      } else {
+        setActionError(msg);
+      }
     } finally {
       setIsActionLoading(false);
     }
@@ -608,7 +625,7 @@ export const DonationsScreen: React.FC = () => {
                   Cancelled on: {new Date(selectedDonation.deleted_at).toLocaleString('en-IN')}.
                   <br />
                   Reason: <em>"{selectedDonation.deletion_reason || 'No reason specified'}"</em>.
-                  Receipt number remains permanently reserved in registry.
+                  Its receipt number has been released for reuse, while full audit history remains preserved.
                 </p>
               </div>
             )}
@@ -698,8 +715,8 @@ export const DonationsScreen: React.FC = () => {
 
             <div className="p-3 bg-sky-500/10 border border-sky-500/20 text-sky-300 rounded-xl text-[11px] leading-relaxed">
               <strong>Audit Policy:</strong> Correcting a donation creates a permanent revision
-              snapshot. If receipt number is changed, the old receipt number remains reserved forever in
-              the registry and cannot be reassigned to any other donation.
+              snapshot. If the receipt number is changed, the old receipt number is freed for reuse
+              while the previous value remains recorded in revision and audit history.
             </div>
 
             <div className="space-y-1.5">
@@ -746,7 +763,7 @@ export const DonationsScreen: React.FC = () => {
               {editAvailability === 'duplicate' && (
                 <p className="text-[11px] text-red-400 flex items-center gap-1 font-mono tabular-nums">
                   <XCircle className="w-3.5 h-3.5 shrink-0" />
-                  <span>Duplicate receipt: {editReceiptBuild.fullReceiptNumber} is already reserved.</span>
+                  <span>Duplicate receipt: {editReceiptBuild.fullReceiptNumber} is already in use by another active donation.</span>
                 </p>
               )}
             </div>
@@ -852,7 +869,7 @@ export const DonationsScreen: React.FC = () => {
         onClose={() => setIsCancelModalOpen(false)}
         onConfirm={handleConfirmCancel}
         title="Cancel / Mark Donation as Deleted"
-        description="Never permanently deleted: This donation will be marked as cancelled and excluded from active financial totals. Its receipt number remains permanently reserved."
+        description="Never permanently deleted: This donation will be marked as cancelled and excluded from active financial totals. Its receipt number will become available for reuse while full cancellation history remains in the audit log."
         confirmLabel="Cancel Donation"
         isDestructive={true}
         isLoading={isActionLoading}

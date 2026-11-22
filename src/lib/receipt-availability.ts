@@ -47,11 +47,12 @@ export async function checkReceiptAvailability(params: {
     };
   }
 
-  // Fallback check against active/cancelled donations if the latest migration RPC is not yet deployed
+  // Fallback check against active donations if the latest migration RPC is not yet deployed
   let query = supabase
     .from('donations')
     .select('id')
     .eq('church_id', churchId)
+    .is('deleted_at', null)
     .ilike('receipt_number', built.fullReceiptNumber)
     .limit(1);
 
