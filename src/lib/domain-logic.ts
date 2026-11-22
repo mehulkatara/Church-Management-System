@@ -1432,4 +1432,197 @@ export function buildAndroidSmsGatewayPayload(params: {
   return payload;
 }
 
+export interface DashboardDonationInput {
+  donation_date: string;
+  amount: number | string;
+  deleted_at?: string | null;
+  category?: { name?: string | null } | Array<{ name?: string | null }> | null;
+  category_name?: string | null;
+}
 
+export interface CurrentMonthSummary {
+  monthKey: string;
+  monthLabel: string;
+  totalAmount: number;
+  receiptCount: number;
+}
+
+export interface MonthlyFyTrendPoint {
+  monthKey: string;
+  shortLabel: string;
+  fullLabel: string;
+  totalAmount: number;
+  receiptCount: number;
+  isCurrentMonth: boolean;
+}
+
+export interface CategoryBreakdownItem {
+  categoryName: string;
+  totalAmount: number;
+  receiptCount: number;
+  percentage: number;
+}
+
+const SHORT_MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/**
+ * Formats INR values compactly for chart axis ticks (e.g., ₹0, ₹850, ₹12.5k, ₹1.8L, ₹2.4Cr).
+ */
+export function formatCompactINR(amount: number): string {
+  const value = Number(amount) || 0;
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '-' : '';
+  if (abs >= 10_000_000) {
+    const cr = abs / 10_000_000;
+    return `${sign}₹${Number(cr.toFixed(cr >= 10 ? 0 : 1))}Cr`;
+  }
+  if (abs >= 100_000) {
+    const l = abs / 100_000;
+    return `${sign}₹${Number(l.toFixed(l >= 10 ? 0 : 1))}L`;
+  }
+  if (abs >= 1_000) {
+    const k = abs / 1_000;
+    return `${sign}₹${Number(k.toFixed(k >= 100 ? 0 : 1))}k`;
+  }
+  return `${sign}₹${Math.round(abs)}`;
+}
+
+/**
+ * Extracts YYYY-MM in Asia/Kolkata (or from a YYYY-MM-DD date string).
+ */
+export function getKolkataMonthKey(referenceDate: Date | string = new Date()): string {
+  if (typeof referenceDate === 'string') {
+    const m = /^(\d{4})-(\d{2})/.exec(referenceDate.trim());
+    if (m) return `${m[1]}-${m[2]}`;
+  }
+  const parsed = typeof referenceDate === 'string' ? new Date(referenceDate) : referenceDate;
+  const isoDate = parsed.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  return isoDate.slice(0, 7);
+}
+
+function formatMonthKeyLabel(monthKey: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!m) return monthKey;
+  const year = parseInt(m[1], 10);
+  const monthIdx = parseInt(m[2], 10) - 1;
+  const shortMonth = SHORT_MONTH_NAMES[monthIdx] || m[2];
+  return `${shortMonth} ${year}`;
+}
+
+/**
+ * Computes current Asia/Kolkata calendar month total and valid receipt count.
+ */
+export function computeCurrentMonthSummary(
+  donations: DashboardDonationInput[],
+  referenceDate: Date | string = new Date()
+): CurrentMonthSummary {
+  const monthKey = getKolkataMonthKey(referenceDate);
+  let totalAmount = 0;
+  let receiptCount = 0;
+
+  for (const d of donations) {
+    if (d.deleted_at) continue;
+    if (!d.donation_date || !d.donation_date.startsWith(monthKey)) continue;
+    totalAmount += Number(d.amount) || 0;
+    receiptCount += 1;
+  }
+
+  return {
+    monthKey,
+    monthLabel: formatMonthKeyLabel(monthKey),
+    totalAmount: Math.round(totalAmount * 100) / 100,
+    receiptCount,
+  };
+}
+
+/**
+ * Builds the 12-month Indian Financial Year series (April through March) from active donations.
+ */
+export function buildMonthlyFyTrend(
+  donations: DashboardDonationInput[],
+  fyStartYear: number,
+  referenceDate: Date | string = new Date()
+): MonthlyFyTrendPoint[] {
+  const currentMonthKey = getKolkataMonthKey(referenceDate);
+
+  const buckets = new Map<string, { totalAmount: number; receiptCount: number }>();
+  const orderedMonths: Array<{ monthKey: string; shortLabel: string; fullLabel: string }> = [];
+
+  for (let i = 0; i < 12; i += 1) {
+    const monthNumber = ((3 + i) % 12) + 1; // 4..12, then 1..3
+    const year = monthNumber >= 4 ? fyStartYear : fyStartYear + 1;
+    const monthKey = `${year}-${String(monthNumber).padStart(2, '0')}`;
+    const shortLabel = SHORT_MONTH_NAMES[monthNumber - 1];
+    orderedMonths.push({
+      monthKey,
+      shortLabel,
+      fullLabel: `${shortLabel} ${year}`,
+    });
+    buckets.set(monthKey, { totalAmount: 0, receiptCount: 0 });
+  }
+
+  for (const d of donations) {
+    if (d.deleted_at) continue;
+    const monthKey = (d.donation_date || '').slice(0, 7);
+    const bucket = buckets.get(monthKey);
+    if (!bucket) continue;
+    bucket.totalAmount += Number(d.amount) || 0;
+    bucket.receiptCount += 1;
+  }
+
+  return orderedMonths.map((meta) => {
+    const bucket = buckets.get(meta.monthKey)!;
+    return {
+      monthKey: meta.monthKey,
+      shortLabel: meta.shortLabel,
+      fullLabel: meta.fullLabel,
+      totalAmount: Math.round(bucket.totalAmount * 100) / 100,
+      receiptCount: bucket.receiptCount,
+      isCurrentMonth: meta.monthKey === currentMonthKey,
+    };
+  });
+}
+
+/**
+ * Aggregates non-deleted Financial Year donations by category, ranked descending by total amount.
+ */
+export function buildCategoryBreakdown(
+  donations: DashboardDonationInput[]
+): CategoryBreakdownItem[] {
+  const map = new Map<string, { totalAmount: number; receiptCount: number }>();
+  let grandTotal = 0;
+
+  for (const d of donations) {
+    if (d.deleted_at) continue;
+    const joinedCategory = Array.isArray(d.category) ? d.category[0]?.name : d.category?.name;
+    const rawName = joinedCategory || d.category_name || 'Uncategorized';
+    const categoryName = rawName.trim() || 'Uncategorized';
+    const amount = Number(d.amount) || 0;
+    grandTotal += amount;
+
+    const current = map.get(categoryName) || { totalAmount: 0, receiptCount: 0 };
+    current.totalAmount += amount;
+    current.receiptCount += 1;
+    map.set(categoryName, current);
+  }
+
+  return Array.from(map.entries())
+    .map(([categoryName, stats]) => {
+      const roundedAmount = Math.round(stats.totalAmount * 100) / 100;
+      const percentage =
+        grandTotal > 0 ? Math.round((roundedAmount / grandTotal) * 1000) / 10 : 0;
+      return {
+        categoryName,
+        totalAmount: roundedAmount,
+        receiptCount: stats.receiptCount,
+        percentage,
+      };
+    })
+    .sort((a, b) => {
+      if (b.totalAmount !== a.totalAmount) return b.totalAmount - a.totalAmount;
+      return a.categoryName.localeCompare(b.categoryName);
+    });
+}

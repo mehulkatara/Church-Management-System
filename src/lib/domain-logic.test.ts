@@ -695,4 +695,98 @@ test('Android SMS Gateway URL validation, E.164 phone formatting, and POST /mess
   });
 });
 
+import {
+  formatCompactINR,
+  computeCurrentMonthSummary,
+  buildMonthlyFyTrend,
+  buildCategoryBreakdown,
+} from './domain-logic';
+
+test('Dashboard analytics helpers compute current month summary, Apr-Mar FY trend, and category shares accurately', () => {
+  assert.equal(formatCompactINR(0), '₹0');
+  assert.equal(formatCompactINR(850), '₹850');
+  assert.equal(formatCompactINR(12500), '₹12.5k');
+  assert.equal(formatCompactINR(180000), '₹1.8L');
+  assert.equal(formatCompactINR(25000000), '₹2.5Cr');
+
+  const sampleDonations = [
+    {
+      donation_date: '2026-04-05',
+      amount: 2000,
+      deleted_at: null,
+      category: { name: 'Tithe' },
+    },
+    {
+      donation_date: '2026-11-10',
+      amount: 1500.5,
+      deleted_at: null,
+      category: { name: 'Tithe' },
+    },
+    {
+      donation_date: '2026-11-21',
+      amount: 500,
+      deleted_at: null,
+      category: { name: 'Building Fund' },
+    },
+    {
+      donation_date: '2026-11-22',
+      amount: 9999,
+      deleted_at: '2026-11-22T10:00:00Z', // soft-deleted must be excluded
+      category: { name: 'Cancelled' },
+    },
+    {
+      donation_date: '2027-02-14',
+      amount: 1000,
+      deleted_at: null,
+      category: { name: 'Missionary' },
+    },
+  ];
+
+  // Current month (Nov 2026) excludes deleted and other months
+  const monthSummary = computeCurrentMonthSummary(sampleDonations, '2026-11-22');
+  assert.equal(monthSummary.monthKey, '2026-11');
+  assert.equal(monthSummary.monthLabel, 'Nov 2026');
+  assert.equal(monthSummary.totalAmount, 2000.5);
+  assert.equal(monthSummary.receiptCount, 2);
+
+  // 12-month Financial Year trend runs Apr 2026 -> Mar 2027 and flags current month
+  const trend = buildMonthlyFyTrend(sampleDonations, 2026, '2026-11-22');
+  assert.equal(trend.length, 12);
+  assert.equal(trend[0].monthKey, '2026-04');
+  assert.equal(trend[0].shortLabel, 'Apr');
+  assert.equal(trend[0].totalAmount, 2000);
+  assert.equal(trend[0].receiptCount, 1);
+
+  assert.equal(trend[7].monthKey, '2026-11');
+  assert.equal(trend[7].isCurrentMonth, true);
+  assert.equal(trend[7].totalAmount, 2000.5);
+  assert.equal(trend[7].receiptCount, 2);
+
+  assert.equal(trend[10].monthKey, '2027-02');
+  assert.equal(trend[10].totalAmount, 1000);
+  assert.equal(trend[11].monthKey, '2027-03');
+  assert.equal(trend[11].totalAmount, 0);
+
+  // Category breakdown ranks descending and excludes deleted rows
+  const categories = buildCategoryBreakdown(sampleDonations);
+  assert.equal(categories.length, 3);
+  assert.deepEqual(categories[0], {
+    categoryName: 'Tithe',
+    totalAmount: 3500.5,
+    receiptCount: 2,
+    percentage: 70,
+  });
+  assert.deepEqual(categories[1], {
+    categoryName: 'Missionary',
+    totalAmount: 1000,
+    receiptCount: 1,
+    percentage: 20,
+  });
+  assert.deepEqual(categories[2], {
+    categoryName: 'Building Fund',
+    totalAmount: 500,
+    receiptCount: 1,
+    percentage: 10,
+  });
+});
 
