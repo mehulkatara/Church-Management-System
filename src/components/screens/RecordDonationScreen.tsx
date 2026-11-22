@@ -10,6 +10,7 @@ import {
   formatINR,
 } from '../../lib/domain-logic';
 import { checkReceiptAvailability } from '../../lib/receipt-availability';
+import { dispatchDonationSms, retrySmsJob, SmsDispatchResponse } from '../../lib/sms-gateway';
 import { MemberSearchCombobox } from '../common/MemberSearchCombobox';
 import {
   Receipt,
@@ -17,10 +18,11 @@ import {
   IndianRupee,
   AlertCircle,
   CheckCircle2,
-  MessageSquare,
   Copy,
   RotateCcw,
   AlertTriangle,
+  Loader2,
+  Server,
 } from 'lucide-react';
 
 interface RecordDonationScreenProps {
@@ -72,6 +74,12 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     categoryName: string;
     donationDate: string;
   } | null>(null);
+  const [smsStatus, setSmsStatus] = useState<
+    | { state: 'idle' }
+    | { state: 'sending' }
+    | { state: 'done'; result: SmsDispatchResponse }
+  >({ state: 'idle' });
+  const [isRetryingSms, setIsRetryingSms] = useState(false);
 
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
@@ -262,6 +270,18 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       if (onDonationSaved && data?.id) {
         onDonationSaved(data.id);
       }
+
+      if (savedInfo.memberPhone && data?.id) {
+        setSmsStatus({ state: 'sending' });
+        void dispatchDonationSms({
+          churchId: activeChurch.id,
+          donationId: data.id,
+        }).then((dispatchRes) => {
+          setSmsStatus({ state: 'done', result: dispatchRes });
+        });
+      } else {
+        setSmsStatus({ state: 'idle' });
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to save donation.';
       if (msg.includes('already exists')) {
@@ -277,8 +297,27 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     }
   };
 
+  const handleRetrySavedSms = async () => {
+    if (!activeChurch || !savedDonation) return;
+    setIsRetryingSms(true);
+    try {
+      const jobId = smsStatus.state === 'done' ? smsStatus.result.jobId : undefined;
+      const res = jobId
+        ? await retrySmsJob(jobId)
+        : await dispatchDonationSms({
+            churchId: activeChurch.id,
+            donationId: savedDonation.id,
+          });
+      setSmsStatus({ state: 'done', result: res });
+    } finally {
+      setIsRetryingSms(false);
+    }
+  };
+
   const handleResetForNext = () => {
     setSavedDonation(null);
+    setSmsStatus({ state: 'idle' });
+    setIsRetryingSms(false);
     setSelectedMember(null);
     setReceiptDigits('');
     setAvailabilityState('idle');
@@ -298,10 +337,6 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       donationDate: savedDonation.donationDate,
       receiptNumber: savedDonation.receiptNumber,
     });
-
-    const smsUrl = savedDonation.memberPhone
-      ? `sms:${encodeURIComponent(savedDonation.memberPhone)}?body=${encodeURIComponent(formattedMsg)}`
-      : `sms:?body=${encodeURIComponent(formattedMsg)}`;
 
     return (
       <div className="max-w-xl mx-auto space-y-6 animate-in fade-in">
@@ -351,58 +386,73 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
             </div>
           </div>
 
-          {/* Mode A: Send from my phone workflow */}
+          {/* Plan B: Automatic Android SMS Gateway Delivery */}
           <div className="bg-gradient-to-br from-sky-950/40 via-slate-950 to-slate-950 border border-sky-500/30 rounded-2xl p-4 text-left space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-sky-400 text-xs font-semibold">
-                <MessageSquare className="w-4 h-4" />
-                <span>Mode A: Send SMS from my phone</span>
+                <Server className="w-4 h-4 shrink-0" />
+                <span>Android SMS Gateway Delivery</span>
               </div>
-              <span className="text-[10px] text-slate-400 font-mono">Personal SIM</span>
+              <span className="text-[11px] font-mono text-slate-400">Plan B</span>
             </div>
 
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Opens your device's SMS app pre-filled with the official receipt message.
-              Requires carrier SMS balance or plan.
-            </p>
-
-            <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-xs text-slate-300 font-mono leading-relaxed">
-              "{formattedMsg}"
-            </div>
-
-            {savedDonation.memberPhone ? (
-              <a
-                href={smsUrl}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg shadow-emerald-600/20"
-              >
-                <MessageSquare className="w-4 h-4" />
-                <span>Send SMS from my phone ({savedDonation.memberPhone})</span>
-              </a>
-            ) : (
+            {!savedDonation.memberPhone ? (
               <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>No phone number saved for this member. You can copy the message below.</span>
+                <span>No mobile number saved for this member — automatic SMS was skipped.</span>
               </div>
-            )}
+            ) : smsStatus.state === 'sending' ? (
+              <div className="text-xs text-sky-300 bg-sky-500/10 border border-sky-500/20 p-3 rounded-xl flex items-center gap-2.5">
+                <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                <span>Sending receipt SMS to {savedDonation.memberPhone} via Android SMS Gateway...</span>
+              </div>
+            ) : smsStatus.state === 'done' && smsStatus.result.ok ? (
+              <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-xl space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Submitted to Android SMS Gateway ({savedDonation.memberPhone})</span>
+                </div>
+                {smsStatus.result.externalId && (
+                  <div className="text-[11px] font-mono text-emerald-200/80 pl-6">
+                    Gateway Message ID: {smsStatus.result.externalId}
+                  </div>
+                )}
+              </div>
+            ) : smsStatus.state === 'done' ? (
+              <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl space-y-2.5">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{smsStatus.result.message}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRetrySavedSms}
+                  disabled={isRetryingSms}
+                  className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-sky-300 font-semibold text-xs py-2 px-3 rounded-lg border border-slate-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {isRetryingSms ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isRetryingSms ? 'Retrying SMS...' : 'Retry SMS Dispatch'}</span>
+                </button>
+              </div>
+            ) : null}
+
+            <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-xs text-slate-300 font-mono leading-relaxed">
+              &ldquo;{formattedMsg}&rdquo;
+            </div>
 
             <div className="flex items-center gap-2 pt-1">
               <button
+                type="button"
                 onClick={() => handleCopy(formattedMsg, 'msg')}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs py-2 px-3 rounded-lg border border-slate-700 flex items-center justify-center gap-1.5 transition-colors"
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs py-2 px-3 rounded-lg border border-slate-700 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Copy className="w-3.5 h-3.5" />
                 <span>{copiedText === 'msg' ? 'Copied Message!' : 'Copy Message'}</span>
               </button>
-
-              {savedDonation.memberPhone && (
-                <button
-                  onClick={() => handleCopy(savedDonation.memberPhone!, 'phone')}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs py-2 px-3 rounded-lg border border-slate-700 flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>{copiedText === 'phone' ? 'Copied Number!' : 'Copy Phone'}</span>
-                </button>
-              )}
             </div>
           </div>
 

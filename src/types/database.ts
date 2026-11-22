@@ -235,6 +235,18 @@ export interface NotificationAttempt {
   created_at: string;
 }
 
+export interface AndroidSmsGatewayStatus {
+  configured: boolean;
+  enabled: boolean;
+  provider: 'android_sms_gateway';
+  api_url: string;
+  username: string | null;
+  has_password: boolean;
+  device_id: string | null;
+  sim_number: 1 | 2 | null;
+  updated_at: string | null;
+}
+
 export interface ReportExport {
   id: string;
   church_id: string;

@@ -1296,3 +1296,140 @@ export function buildMemberSearchOrFilter(raw: string | null | undefined): strin
   return `full_name.ilike.${pattern},member_number.ilike.${pattern},village_name.ilike.${pattern}`;
 }
 
+export const DEFAULT_ANDROID_SMS_GATEWAY_URL = 'https://api.sms-gate.app/3rdparty/v1';
+
+/**
+ * Validates and normalizes the Android SMS Gateway Cloud/HTTPS base URL.
+ * Blocks insecure http:, private LAN IPs, loopback, and link-local hosts.
+ */
+export function validateAndroidSmsGatewayUrl(rawUrl: string | null | undefined): {
+  valid: boolean;
+  normalized: string;
+  error?: string;
+} {
+  const trimmed = (rawUrl || '').trim().replace(/\/+$/, '');
+  const candidate = trimmed || DEFAULT_ANDROID_SMS_GATEWAY_URL;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return {
+      valid: false,
+      normalized: candidate,
+      error: 'Enter a valid HTTPS URL (for example, https://api.sms-gate.app/3rdparty/v1).',
+    };
+  }
+
+  if (parsed.protocol !== 'https:') {
+    return {
+      valid: false,
+      normalized: candidate,
+      error: 'Gateway URL must start with https://',
+    };
+  }
+
+  if (parsed.username || parsed.password) {
+    return {
+      valid: false,
+      normalized: candidate,
+      error: 'Gateway URL must not include embedded credentials.',
+    };
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '0.0.0.0' ||
+    host.includes(':') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+  ) {
+    return {
+      valid: false,
+      normalized: candidate,
+      error: 'Private LAN, loopback, and link-local addresses are not allowed. Use Cloud Server (https://api.sms-gate.app/3rdparty/v1) or a public HTTPS endpoint.',
+    };
+  }
+
+  return { valid: true, normalized: candidate };
+}
+
+/**
+ * Normalizes Indian or international mobile numbers to E.164 format (+91XXXXXXXXXX)
+ * for Android SMS Gateway delivery.
+ */
+export function formatPhoneForSmsGateway(rawPhone: string | null | undefined): string | null {
+  const trimmed = (rawPhone || '').trim();
+  if (!trimmed) return null;
+
+  const hasPlus = trimmed.startsWith('+');
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits) return null;
+
+  if (hasPlus) {
+    return /^[1-9]\d{7,14}$/.test(digits) ? `+${digits}` : null;
+  }
+  if (/^[6-9]\d{9}$/.test(digits)) {
+    return `+91${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith('0') && /^[6-9]\d{9}$/.test(digits.slice(1))) {
+    return `+91${digits.slice(1)}`;
+  }
+  if (digits.length === 12 && digits.startsWith('91') && /^[6-9]\d{9}$/.test(digits.slice(2))) {
+    return `+${digits}`;
+  }
+  if (/^[1-9]\d{7,14}$/.test(digits)) {
+    return `+${digits}`;
+  }
+  return null;
+}
+
+export interface AndroidSmsGatewayMessagePayload {
+  id?: string;
+  textMessage: {
+    text: string;
+  };
+  phoneNumbers: string[];
+  withDeliveryReport: boolean;
+  deviceId?: string;
+  simNumber?: 1 | 2;
+}
+
+/**
+ * Builds the official capcom6/android-sms-gateway POST /messages JSON payload.
+ */
+export function buildAndroidSmsGatewayPayload(params: {
+  phone: string;
+  text: string;
+  messageId?: string;
+  deviceId?: string | null;
+  simNumber?: number | null;
+}): AndroidSmsGatewayMessagePayload {
+  const payload: AndroidSmsGatewayMessagePayload = {
+    textMessage: { text: params.text },
+    phoneNumbers: [params.phone],
+    withDeliveryReport: true,
+  };
+
+  if (params.messageId && params.messageId.trim()) {
+    payload.id = params.messageId.trim();
+  }
+  if (params.deviceId && params.deviceId.trim()) {
+    payload.deviceId = params.deviceId.trim();
+  }
+  if (params.simNumber === 1 || params.simNumber === 2) {
+    payload.simNumber = params.simNumber;
+  }
+
+  return payload;
+}
+
+

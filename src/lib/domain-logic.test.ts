@@ -491,6 +491,10 @@ import {
   validateNewChurchInput,
   sanitizeMemberSearchQuery,
   buildMemberSearchOrFilter,
+  DEFAULT_ANDROID_SMS_GATEWAY_URL,
+  validateAndroidSmsGatewayUrl,
+  formatPhoneForSmsGateway,
+  buildAndroidSmsGatewayPayload,
 } from './domain-logic';
 
 test('All church staff including Collector can manage single-use member share links; Member cannot', () => {
@@ -644,4 +648,51 @@ test('Live member search query sanitization and PostgREST OR filter handle blank
     'full_name.ilike.%Mary Nellore%,member_number.ilike.%Mary Nellore%,village_name.ilike.%Mary Nellore%'
   );
 });
+
+test('Android SMS Gateway URL validation, E.164 phone formatting, and POST /messages payload builder work cleanly', () => {
+  const def = validateAndroidSmsGatewayUrl('');
+  assert.equal(def.valid, true);
+  assert.equal(def.normalized, DEFAULT_ANDROID_SMS_GATEWAY_URL);
+
+  const validCustom = validateAndroidSmsGatewayUrl('https://api.sms-gate.app/3rdparty/v1/');
+  assert.equal(validCustom.valid, true);
+  assert.equal(validCustom.normalized, 'https://api.sms-gate.app/3rdparty/v1');
+
+  assert.equal(validateAndroidSmsGatewayUrl('http://api.sms-gate.app/3rdparty/v1').valid, false);
+  assert.equal(validateAndroidSmsGatewayUrl('https://192.168.1.50:8080').valid, false);
+  assert.equal(validateAndroidSmsGatewayUrl('https://localhost:8080').valid, false);
+  assert.equal(validateAndroidSmsGatewayUrl('https://127.0.0.1:8080').valid, false);
+
+  assert.equal(formatPhoneForSmsGateway('9840012345'), '+919840012345');
+  assert.equal(formatPhoneForSmsGateway('098400 12345'), '+919840012345');
+  assert.equal(formatPhoneForSmsGateway('+91 98400-12345'), '+919840012345');
+  assert.equal(formatPhoneForSmsGateway('123'), null);
+
+  const payload = buildAndroidSmsGatewayPayload({
+    phone: '+919840012345',
+    text: 'Receipt test',
+    messageId: 'job-123',
+    deviceId: 'dev-xyz',
+    simNumber: 2,
+  });
+  assert.deepEqual(payload, {
+    id: 'job-123',
+    textMessage: { text: 'Receipt test' },
+    phoneNumbers: ['+919840012345'],
+    withDeliveryReport: true,
+    deviceId: 'dev-xyz',
+    simNumber: 2,
+  });
+
+  const minimalPayload = buildAndroidSmsGatewayPayload({
+    phone: '+919840012345',
+    text: 'Receipt test',
+  });
+  assert.deepEqual(minimalPayload, {
+    textMessage: { text: 'Receipt test' },
+    phoneNumbers: ['+919840012345'],
+    withDeliveryReport: true,
+  });
+});
+
 

@@ -358,24 +358,27 @@ WHERE email = 'admin@yourchurch.org';`}
                 <p>7. 20261121000001_church_code_member_numbers.sql &mdash; Church-code-prefixed new member IDs (&lt;CODE&gt;-1, ...) &amp; church code lock</p>
                 <p>8. 20261121000002_strict_church_creation_fields_and_code.sql &mdash; Mandatory church creation fields &amp; strict A&ndash;Z/0&ndash;9/- church code validation</p>
                 <p>9. 20261121000003_category_code_optional_and_active_leaderboard.sql &mdash; Remove category code DB requirement &amp; active-only member portal leaderboard</p>
+                <p>10. 20261121000004_android_sms_gateway_plan_b.sql &mdash; Plan B Android SMS Gateway credential store &amp; secure RPCs</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- All 19 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
+                <p className="text-sky-400">-- All 20 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
                 <p>member_share_links, access_requests, donation_categories, receiving_accounts, donations,</p>
-                <p>receipt_number_registry, donation_revisions, audit_logs, church_settings, notifications,</p>
-                <p>notification_jobs, notification_attempts, report_exports</p>
+                <p>receipt_number_registry, donation_revisions, audit_logs, church_settings, church_sms_gateways,</p>
+                <p>notifications, notification_jobs, notification_attempts, report_exports</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-emerald-400">-- Atomic procedures &amp; triggers included:</p>
+                <p className="text-emerald-400">-- Atomic procedures, triggers &amp; Edge Functions included:</p>
                 <p>&bull; <code>handle_new_user()</code>: sync auth.users sign-ups into public.profiles</p>
                 <p>&bull; <code>record_donation()</code>, <code>correct_donation()</code>, <code>cancel_donation()</code></p>
                 <p>&bull; <code>change_member_status()</code> &amp; <code>update_my_member_profile()</code></p>
                 <p>&bull; <code>create_member_share_link()</code>, <code>revoke_member_share_link()</code>, <code>redeem_member_share_link()</code></p>
+                <p>&bull; <code>get_church_sms_gateway_status()</code> &amp; <code>upsert_church_sms_gateway()</code></p>
                 <p>&bull; <code>submit_profile_request()</code>, <code>approve_access_request_v2()</code>, <code>return_access_request_for_correction()</code></p>
                 <p>&bull; <code>get_church_staff_management_data()</code>, <code>assign_church_staff_role()</code>, <code>toggle_church_staff_status()</code></p>
+                <p>&bull; Edge Functions: <code>supabase functions deploy sms-gateway-dispatch</code> &amp; <code>notification-worker</code></p>
               </div>
             </div>
           </div>
