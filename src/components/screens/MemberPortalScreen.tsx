@@ -10,6 +10,8 @@ import {
   ArrowLeft,
   Eye,
   UserCheck,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import type { MemberPortalPayload } from '../../types/database';
 import {
@@ -17,8 +19,12 @@ import {
   GENDER_LABELS,
   getFinancialYear,
   getFinancialYearOptions,
+  buildMonthlyFyTrend,
+  buildCategoryBreakdown,
+  type DashboardDonationInput,
 } from '../../lib/domain-logic';
 import { redeemMemberShareLink } from '../../lib/member-share-links';
+import { DashboardAnalytics } from '../dashboard/DashboardAnalytics';
 
 interface MemberPortalScreenProps {
   onNavigatePath: (path: string) => void;
@@ -32,6 +38,7 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
   const [selectedFy, setSelectedFy] = useState<string>(() => getFinancialYear(new Date()).fyCode);
   const [donationScope, setDonationScope] = useState<'fy' | 'all'>('fy');
   const [donationQuery, setDonationQuery] = useState('');
+  const [isProfileExpanded, setIsProfileExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +148,36 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
       }
     );
   }, [payload, selectedFy]);
+
+  const selectedFyLabel = useMemo(() => {
+    const match = fyOptions.find((fy) => fy.fyCode === selectedFy);
+    return match ? match.label : `FY ${selectedFy}`;
+  }, [fyOptions, selectedFy]);
+
+  const selectedFyStartYear = useMemo(() => {
+    const m = /^(\d{4})/.exec(selectedFy);
+    return m ? parseInt(m[1], 10) : getFinancialYear(new Date()).startYear;
+  }, [selectedFy]);
+
+  const selectedFyChartDonations = useMemo<DashboardDonationInput[]>(() => {
+    return allDonations
+      .filter((d) => getFinancialYear(d.donation_date).fyCode === selectedFy)
+      .map((d) => ({
+        donation_date: d.donation_date,
+        amount: d.amount,
+        category_name: d.category_name,
+      }));
+  }, [allDonations, selectedFy]);
+
+  const monthlyTrend = useMemo(
+    () => buildMonthlyFyTrend(selectedFyChartDonations, selectedFyStartYear),
+    [selectedFyChartDonations, selectedFyStartYear]
+  );
+
+  const categoryBreakdown = useMemo(
+    () => buildCategoryBreakdown(selectedFyChartDonations),
+    [selectedFyChartDonations]
+  );
 
   const formatTimestamp = (iso?: string | null) => {
     if (!iso) return 'Just now';
@@ -345,99 +382,125 @@ export const MemberPortalScreen: React.FC<MemberPortalScreenProps> = ({
           </span>
         </div>
 
-        {/* Section 1: Member Profile */}
+        {/* Section 1: Collapsible Member Profile (Collapsed by Default) */}
         <section
           aria-labelledby="portal-profile-heading"
-          className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5"
+          className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden"
         >
-          <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2 pb-4 border-b border-slate-800">
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-sky-400">Member Profile</p>
+          <button
+            type="button"
+            onClick={() => setIsProfileExpanded((prev) => !prev)}
+            aria-expanded={isProfileExpanded}
+            aria-controls="portal-profile-details"
+            className="w-full px-6 py-4 text-left flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-800/40 transition-colors cursor-pointer"
+          >
+            <div className="space-y-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                <span className="font-medium text-sky-400">Member Profile</span>
+                <span className="text-slate-600" aria-hidden="true">&middot;</span>
+                <span className="font-mono tabular-nums text-sky-300 font-semibold">
+                  {member.member_number}
+                </span>
+                <span className="text-slate-600" aria-hidden="true">&middot;</span>
+                <span className={isActive ? 'text-emerald-400 font-medium' : 'text-slate-400 font-medium'}>
+                  {isActive ? 'Active Member' : 'Inactive Member'}
+                </span>
+              </div>
               <h1
                 id="portal-profile-heading"
-                className="text-2xl font-bold text-white tracking-tight [text-wrap:balance]"
+                className="text-xl sm:text-2xl font-bold text-white tracking-tight [text-wrap:balance] truncate"
               >
                 {member.full_name}
               </h1>
             </div>
 
-            <div className="text-xs text-slate-300 flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="font-mono tabular-nums text-sky-400 font-semibold">
-                {member.member_number}
-              </span>
-              <span className="text-slate-600">&middot;</span>
-              <span className={isActive ? 'text-emerald-400 font-medium' : 'text-slate-400 font-medium'}>
-                {isActive ? 'Active Member' : 'Inactive Member'}
-              </span>
-              {member.village_name && (
-                <>
-                  <span className="text-slate-600">&middot;</span>
-                  <span>{member.village_name}</span>
-                </>
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 whitespace-nowrap shrink-0 self-start sm:self-center">
+              <span>{isProfileExpanded ? 'Hide Details' : 'View Profile Details'}</span>
+              {isProfileExpanded ? (
+                <ChevronUp className="w-4 h-4 text-slate-400" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-slate-400" />
               )}
-            </div>
-          </div>
+            </span>
+          </button>
 
-          <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 text-xs">
-            <div>
-              <dt className="text-slate-400 mb-1">Member Number</dt>
-              <dd className="text-sm font-mono tabular-nums font-medium text-white">
-                {member.member_number}
-              </dd>
-            </div>
+          {isProfileExpanded && (
+            <div
+              id="portal-profile-details"
+              className="px-6 pb-6 pt-5 border-t border-slate-800"
+            >
+              <dl className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 text-xs">
+                <div>
+                  <dt className="text-slate-400 mb-1">Member Number</dt>
+                  <dd className="text-sm font-mono tabular-nums font-medium text-white">
+                    {member.member_number}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Mobile Number</dt>
-              <dd className="text-sm font-mono tabular-nums text-white">
-                {member.contact_phone || <span className="text-slate-500 font-sans">Not provided</span>}
-              </dd>
-            </div>
+                <div>
+                  <dt className="text-slate-400 mb-1">Mobile Number</dt>
+                  <dd className="text-sm font-mono tabular-nums text-white">
+                    {member.contact_phone || <span className="text-slate-500 font-sans">Not provided</span>}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Village / City</dt>
-              <dd className="text-sm text-white">
-                {member.village_name || <span className="text-slate-500">Not provided</span>}
-              </dd>
-            </div>
+                <div>
+                  <dt className="text-slate-400 mb-1">Village / City</dt>
+                  <dd className="text-sm text-white">
+                    {member.village_name || <span className="text-slate-500">Not provided</span>}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Gender</dt>
-              <dd className="text-sm text-white">
-                {member.gender ? GENDER_LABELS[member.gender] : <span className="text-slate-500">Not provided</span>}
-              </dd>
-            </div>
+                <div>
+                  <dt className="text-slate-400 mb-1">Gender</dt>
+                  <dd className="text-sm text-white">
+                    {member.gender ? GENDER_LABELS[member.gender] : <span className="text-slate-500">Not provided</span>}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Date of Birth</dt>
-              <dd className="text-sm font-mono tabular-nums text-white">
-                {member.date_of_birth || <span className="text-slate-500 font-sans">Not provided</span>}
-              </dd>
-            </div>
+                <div>
+                  <dt className="text-slate-400 mb-1">Date of Birth</dt>
+                  <dd className="text-sm font-mono tabular-nums text-white">
+                    {member.date_of_birth || <span className="text-slate-500 font-sans">Not provided</span>}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Joining Date</dt>
-              <dd className="text-sm font-mono tabular-nums text-white">
-                {member.joining_date}
-              </dd>
-            </div>
+                <div>
+                  <dt className="text-slate-400 mb-1">Joining Date</dt>
+                  <dd className="text-sm font-mono tabular-nums text-white">
+                    {member.joining_date}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Membership Status</dt>
-              <dd className={`text-sm font-medium ${isActive ? 'text-emerald-400' : 'text-slate-400'}`}>
-                {isActive ? 'Active' : 'Inactive'}
-              </dd>
-            </div>
+                <div>
+                  <dt className="text-slate-400 mb-1">Membership Status</dt>
+                  <dd className={`text-sm font-medium ${isActive ? 'text-emerald-400' : 'text-slate-400'}`}>
+                    {isActive ? 'Active' : 'Inactive'}
+                  </dd>
+                </div>
 
-            <div>
-              <dt className="text-slate-400 mb-1">Church Contact</dt>
-              <dd className="text-sm text-slate-300 font-mono tabular-nums">
-                {church.phone || church.address || church.name}
-              </dd>
+                <div>
+                  <dt className="text-slate-400 mb-1">Church Contact</dt>
+                  <dd className="text-sm text-slate-300 font-mono tabular-nums">
+                    {church.phone || church.address || church.name}
+                  </dd>
+                </div>
+              </dl>
             </div>
-          </dl>
+          )}
         </section>
 
-        {/* Section 2: Own Donation History */}
+        {/* Section 2: Personal Financial Year Giving Analytics */}
+        <DashboardAnalytics
+          key={selectedFy}
+          fyLabel={selectedFyLabel}
+          isMember={true}
+          isLoading={false}
+          monthlyTrend={monthlyTrend}
+          categoryBreakdown={categoryBreakdown}
+        />
+
+        {/* Section 3: Own Donation History */}
         <section
           aria-labelledby="portal-donations-heading"
           className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden"

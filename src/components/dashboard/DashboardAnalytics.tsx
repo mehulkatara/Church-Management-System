@@ -272,9 +272,11 @@ export const DashboardAnalytics: React.FC<DashboardAnalyticsProps> = ({
                   {peakMonthPoint ? `${peakMonthPoint.fullLabel} (${formatINR(peakMonthPoint.totalAmount)})` : '—'}
                 </strong>
               </span>
-              <span className="font-mono tabular-nums text-slate-500">
-                Current month highlighted in green
-              </span>
+              {monthlyTrend.some((m) => m.isCurrentMonth) && (
+                <span className="font-mono tabular-nums text-slate-500">
+                  Current month highlighted in green
+                </span>
+              )}
             </div>
           </div>
         )}
