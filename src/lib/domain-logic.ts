@@ -1626,3 +1626,282 @@ export function buildCategoryBreakdown(
       return a.categoryName.localeCompare(b.categoryName);
     });
 }
+
+export const EXPENSE_PAYMENT_METHODS = [
+  'Cash',
+  'UPI',
+  'Bank Transfer',
+  'Cheque',
+  'Other',
+] as const;
+
+export interface ExpenseValidationInput {
+  amount: number | string;
+  expenseDate: string;
+  categoryId: string;
+  paidFromAccountId: string;
+  paymentMethod: string;
+  payeeName: string;
+  billReference?: string | null;
+  notes?: string | null;
+}
+
+export interface ValidatedExpensePayload {
+  amount: number;
+  expenseDate: string;
+  categoryId: string;
+  paidFromAccountId: string;
+  paymentMethod: (typeof EXPENSE_PAYMENT_METHODS)[number];
+  payeeName: string;
+  billReference: string | null;
+  notes: string | null;
+}
+
+/**
+ * Validates and normalizes an outgoing church expense entry prior to RPC submission.
+ */
+export function validateExpenseInput(input: ExpenseValidationInput): {
+  valid: boolean;
+  error?: string;
+  sanitized?: ValidatedExpensePayload;
+} {
+  const numericAmount =
+    typeof input.amount === 'number' ? input.amount : parseFloat(String(input.amount || '').trim());
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return { valid: false, error: 'Expense amount must be greater than zero.' };
+  }
+
+  const trimmedDate = (input.expenseDate || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedDate)) {
+    return { valid: false, error: 'Please select a valid expense date.' };
+  }
+
+  const categoryId = (input.categoryId || '').trim();
+  if (!categoryId) {
+    return { valid: false, error: 'Please select an expense category.' };
+  }
+
+  const paidFromAccountId = (input.paidFromAccountId || '').trim();
+  if (!paidFromAccountId) {
+    return { valid: false, error: 'Please select a paid-from account.' };
+  }
+
+  const paymentMethod = (input.paymentMethod || '').trim() as (typeof EXPENSE_PAYMENT_METHODS)[number];
+  if (!EXPENSE_PAYMENT_METHODS.includes(paymentMethod)) {
+    return { valid: false, error: 'Please select a valid payment method.' };
+  }
+
+  const payeeName = (input.payeeName || '').trim();
+  if (!payeeName) {
+    return { valid: false, error: 'Payee / vendor name is required.' };
+  }
+  if (payeeName.length > 160) {
+    return { valid: false, error: 'Payee / vendor name cannot exceed 160 characters.' };
+  }
+
+  const billReference = (input.billReference || '').trim() || null;
+  const notes = (input.notes || '').trim() || null;
+
+  return {
+    valid: true,
+    sanitized: {
+      amount: Math.round(numericAmount * 100) / 100,
+      expenseDate: trimmedDate,
+      categoryId,
+      paidFromAccountId,
+      paymentMethod,
+      payeeName,
+      billReference,
+      notes,
+    },
+  };
+}
+
+export interface DashboardExpenseInput {
+  expense_date: string;
+  amount: number | string;
+  deleted_at?: string | null;
+  category?: { name?: string | null } | Array<{ name?: string | null }> | null;
+  category_name?: string | null;
+  paid_from_account_id?: string | null;
+}
+
+export interface CurrentMonthExpenseSummary {
+  monthKey: string;
+  monthLabel: string;
+  totalAmount: number;
+  entryCount: number;
+}
+
+export interface MonthlyExpenseFyTrendPoint {
+  monthKey: string;
+  shortLabel: string;
+  fullLabel: string;
+  totalAmount: number;
+  entryCount: number;
+  isCurrentMonth: boolean;
+}
+
+export interface ExpenseCategoryBreakdownItem {
+  categoryName: string;
+  totalAmount: number;
+  entryCount: number;
+  percentage: number;
+}
+
+export interface MonthlyCashFlowPoint {
+  monthKey: string;
+  shortLabel: string;
+  fullLabel: string;
+  collectionsAmount: number;
+  expensesAmount: number;
+  netAmount: number;
+  donationCount: number;
+  expenseCount: number;
+  isCurrentMonth: boolean;
+}
+
+/**
+ * Computes current Asia/Kolkata calendar month expense total and active entry count.
+ */
+export function computeExpenseCurrentMonthSummary(
+  expenses: DashboardExpenseInput[],
+  referenceDate: Date | string = new Date()
+): CurrentMonthExpenseSummary {
+  const monthKey = getKolkataMonthKey(referenceDate);
+  let totalAmount = 0;
+  let entryCount = 0;
+
+  for (const e of expenses) {
+    if (e.deleted_at) continue;
+    if (!e.expense_date || !e.expense_date.startsWith(monthKey)) continue;
+    totalAmount += Number(e.amount) || 0;
+    entryCount += 1;
+  }
+
+  return {
+    monthKey,
+    monthLabel: formatMonthKeyLabel(monthKey),
+    totalAmount: Math.round(totalAmount * 100) / 100,
+    entryCount,
+  };
+}
+
+/**
+ * Builds the 12-month Indian Financial Year expense series (April through March) from active expenses.
+ */
+export function buildMonthlyExpenseFyTrend(
+  expenses: DashboardExpenseInput[],
+  fyStartYear: number,
+  referenceDate: Date | string = new Date()
+): MonthlyExpenseFyTrendPoint[] {
+  const currentMonthKey = getKolkataMonthKey(referenceDate);
+
+  const buckets = new Map<string, { totalAmount: number; entryCount: number }>();
+  const orderedMonths: Array<{ monthKey: string; shortLabel: string; fullLabel: string }> = [];
+
+  for (let i = 0; i < 12; i += 1) {
+    const monthNumber = ((3 + i) % 12) + 1;
+    const year = monthNumber >= 4 ? fyStartYear : fyStartYear + 1;
+    const monthKey = `${year}-${String(monthNumber).padStart(2, '0')}`;
+    const shortLabel = SHORT_MONTH_NAMES[monthNumber - 1];
+    orderedMonths.push({
+      monthKey,
+      shortLabel,
+      fullLabel: `${shortLabel} ${year}`,
+    });
+    buckets.set(monthKey, { totalAmount: 0, entryCount: 0 });
+  }
+
+  for (const e of expenses) {
+    if (e.deleted_at) continue;
+    const monthKey = (e.expense_date || '').slice(0, 7);
+    const bucket = buckets.get(monthKey);
+    if (!bucket) continue;
+    bucket.totalAmount += Number(e.amount) || 0;
+    bucket.entryCount += 1;
+  }
+
+  return orderedMonths.map((meta) => {
+    const bucket = buckets.get(meta.monthKey)!;
+    return {
+      monthKey: meta.monthKey,
+      shortLabel: meta.shortLabel,
+      fullLabel: meta.fullLabel,
+      totalAmount: Math.round(bucket.totalAmount * 100) / 100,
+      entryCount: bucket.entryCount,
+      isCurrentMonth: meta.monthKey === currentMonthKey,
+    };
+  });
+}
+
+/**
+ * Aggregates non-deleted Financial Year expenses by church-specific category, ranked descending.
+ */
+export function buildExpenseCategoryBreakdown(
+  expenses: DashboardExpenseInput[]
+): ExpenseCategoryBreakdownItem[] {
+  const map = new Map<string, { totalAmount: number; entryCount: number }>();
+  let grandTotal = 0;
+
+  for (const e of expenses) {
+    if (e.deleted_at) continue;
+    const joinedCategory = Array.isArray(e.category) ? e.category[0]?.name : e.category?.name;
+    const rawName = joinedCategory || e.category_name || 'Uncategorized';
+    const categoryName = rawName.trim() || 'Uncategorized';
+    const amount = Number(e.amount) || 0;
+    grandTotal += amount;
+
+    const current = map.get(categoryName) || { totalAmount: 0, entryCount: 0 };
+    current.totalAmount += amount;
+    current.entryCount += 1;
+    map.set(categoryName, current);
+  }
+
+  return Array.from(map.entries())
+    .map(([categoryName, stats]) => {
+      const roundedAmount = Math.round(stats.totalAmount * 100) / 100;
+      const percentage =
+        grandTotal > 0 ? Math.round((roundedAmount / grandTotal) * 1000) / 10 : 0;
+      return {
+        categoryName,
+        totalAmount: roundedAmount,
+        entryCount: stats.entryCount,
+        percentage,
+      };
+    })
+    .sort((a, b) => {
+      if (b.totalAmount !== a.totalAmount) return b.totalAmount - a.totalAmount;
+      return a.categoryName.localeCompare(b.categoryName);
+    });
+}
+
+/**
+ * Combines 12-month collections and expenses into a unified Apr-Mar monthly net cash-flow trend.
+ */
+export function buildMonthlyCashFlowTrend(
+  donations: DashboardDonationInput[],
+  expenses: DashboardExpenseInput[],
+  fyStartYear: number,
+  referenceDate: Date | string = new Date()
+): MonthlyCashFlowPoint[] {
+  const donationTrend = buildMonthlyFyTrend(donations, fyStartYear, referenceDate);
+  const expenseTrend = buildMonthlyExpenseFyTrend(expenses, fyStartYear, referenceDate);
+
+  return donationTrend.map((dPoint, idx) => {
+    const ePoint = expenseTrend[idx];
+    const collectionsAmount = dPoint.totalAmount;
+    const expensesAmount = ePoint ? ePoint.totalAmount : 0;
+    return {
+      monthKey: dPoint.monthKey,
+      shortLabel: dPoint.shortLabel,
+      fullLabel: dPoint.fullLabel,
+      collectionsAmount,
+      expensesAmount,
+      netAmount: Math.round((collectionsAmount - expensesAmount) * 100) / 100,
+      donationCount: dPoint.receiptCount,
+      expenseCount: ePoint ? ePoint.entryCount : 0,
+      isCurrentMonth: dPoint.isCurrentMonth,
+    };
+  });
+}

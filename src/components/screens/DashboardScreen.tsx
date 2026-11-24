@@ -9,13 +9,17 @@ import {
   computeCurrentMonthSummary,
   buildMonthlyFyTrend,
   buildCategoryBreakdown,
+  buildMonthlyCashFlowTrend,
+  buildExpenseCategoryBreakdown,
   type DashboardDonationInput,
+  type DashboardExpenseInput,
 } from '../../lib/domain-logic';
 import { DashboardAnalytics } from '../dashboard/DashboardAnalytics';
 import {
   PlusCircle,
   FileSpreadsheet,
   ArrowRight,
+  Wallet,
 } from 'lucide-react';
 
 interface DashboardScreenProps {
@@ -32,22 +36,33 @@ interface DashboardDonationRow extends DashboardDonationInput {
   } | null;
 }
 
+interface DashboardExpenseRow extends DashboardExpenseInput {
+  id: string;
+  payee_name: string;
+  created_at?: string;
+}
+
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) => {
   const { activeChurch, activeRole, isPlatformAdmin, user, profile, pendingRequests } = useAuth();
 
   const currentFY = getFinancialYear(new Date());
 
   const [fyDonations, setFyDonations] = useState<DashboardDonationRow[]>([]);
+  const [fyExpenses, setFyExpenses] = useState<DashboardExpenseRow[]>([]);
   const [totalCollections, setTotalCollections] = useState(0);
+  const [totalExpenses, setTotalExpenses] = useState(0);
   const [activeDonationCount, setActiveDonationCount] = useState(0);
+  const [activeExpenseCount, setActiveExpenseCount] = useState(0);
   const [activeMemberCount, setActiveMemberCount] = useState(0);
   const [inactiveMemberCount, setInactiveMemberCount] = useState(0);
   const [userRank, setUserRank] = useState<number | null>(null);
   const [userTotalGiving, setUserTotalGiving] = useState(0);
   const [recentDonations, setRecentDonations] = useState<DashboardDonationRow[]>([]);
+  const [recentExpenses, setRecentExpenses] = useState<DashboardExpenseRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const isStaff = activeRole === 'admin' || activeRole === 'accountant' || activeRole === 'collector' || isPlatformAdmin;
+  const isAdminOrAccountant = activeRole === 'admin' || activeRole === 'accountant' || isPlatformAdmin;
   const isMember = activeRole === 'member';
 
   useEffect(() => {
@@ -91,6 +106,38 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
             setRecentDonations(rows.slice(0, 5));
           } else {
             setFyDonations([]);
+          }
+
+          // Fetch FY expenses strictly for Admin / Accountant roles
+          if (isAdminOrAccountant) {
+            const { data: expData } = await supabase
+              .from('expenses')
+              .select('id, expense_date, amount, created_at, deleted_at, payee_name, category:expense_categories(name)')
+              .eq('church_id', activeChurch.id)
+              .is('deleted_at', null)
+              .gte('expense_date', currentFY.startDate)
+              .lte('expense_date', currentFY.endDate)
+              .order('expense_date', { ascending: false })
+              .order('created_at', { ascending: false });
+
+            if (expData) {
+              const expRows = expData as unknown as DashboardExpenseRow[];
+              const expSum = expRows.reduce((acc, e) => acc + Number(e.amount), 0);
+              setFyExpenses(expRows);
+              setTotalExpenses(expSum);
+              setActiveExpenseCount(expRows.length);
+              setRecentExpenses(expRows.slice(0, 5));
+            } else {
+              setFyExpenses([]);
+              setTotalExpenses(0);
+              setActiveExpenseCount(0);
+              setRecentExpenses([]);
+            }
+          } else {
+            setFyExpenses([]);
+            setTotalExpenses(0);
+            setActiveExpenseCount(0);
+            setRecentExpenses([]);
           }
         } else if (isMember && user) {
           // Member view: fetch member record linked to user
@@ -173,7 +220,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
     };
 
     void fetchDashboardData();
-  }, [activeChurch, isStaff, isMember, user, currentFY.startDate, currentFY.endDate]);
+  }, [activeChurch, isStaff, isAdminOrAccountant, isMember, user, currentFY.startDate, currentFY.endDate]);
 
   const monthSummary = useMemo(
     () => computeCurrentMonthSummary(fyDonations),
@@ -189,6 +236,21 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
     () => buildCategoryBreakdown(fyDonations),
     [fyDonations]
   );
+
+  const monthlyCashFlow = useMemo(
+    () =>
+      isAdminOrAccountant
+        ? buildMonthlyCashFlowTrend(fyDonations, fyExpenses, currentFY.startYear)
+        : [],
+    [isAdminOrAccountant, fyDonations, fyExpenses, currentFY.startYear]
+  );
+
+  const expenseCategoryBreakdown = useMemo(
+    () => (isAdminOrAccountant ? buildExpenseCategoryBreakdown(fyExpenses) : []),
+    [isAdminOrAccountant, fyExpenses]
+  );
+
+  const netFyBalance = totalCollections - totalExpenses;
 
   return (
     <div className="space-y-6">
@@ -213,20 +275,36 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
         </div>
 
         {isStaff && (
-          <button
-            type="button"
-            onClick={() => onNavigate('record_donation')}
-            className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2.5 px-4 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer self-start sm:self-auto whitespace-nowrap shrink-0"
-          >
-            <PlusCircle className="w-4 h-4" />
-            <span>Record Donation</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            {isAdminOrAccountant && (
+              <button
+                type="button"
+                onClick={() => onNavigate('expenses')}
+                className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 font-semibold text-xs py-2.5 px-4 rounded-xl flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Wallet className="w-4 h-4" />
+                <span>Manage Expenses</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('record_donation')}
+              className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2.5 px-4 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Record Donation</span>
+            </button>
+          </div>
         )}
       </div>
 
       {/* STAFF METRICS */}
       {isStaff && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div
+          className={`grid grid-cols-1 sm:grid-cols-2 ${
+            isAdminOrAccountant ? 'lg:grid-cols-3' : 'lg:grid-cols-4'
+          } gap-4`}
+        >
           {/* Total FY Collections */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
             <span className="text-xs text-slate-400 font-medium block">
@@ -240,7 +318,44 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
             </span>
           </div>
 
-          {/* This Month Collections (replaces Receipt Format) */}
+          {/* FY Expenses & Net Balance (Strictly Admin & Accountant) */}
+          {isAdminOrAccountant && (
+            <>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
+                <span className="text-xs text-slate-400 font-medium block">
+                  FY Expenses ({currentFY.fyCode})
+                </span>
+                <div className="text-2xl font-bold font-mono tabular-nums text-amber-400">
+                  {formatINR(totalExpenses)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('expenses')}
+                  className="text-[11px] text-sky-400 hover:text-sky-300 underline font-medium block cursor-pointer font-mono tabular-nums"
+                >
+                  {activeExpenseCount} active payment{activeExpenseCount === 1 ? '' : 's'} &rarr;
+                </button>
+              </div>
+
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
+                <span className="text-xs text-slate-400 font-medium block">
+                  Net FY Balance (Collections &minus; Expenses)
+                </span>
+                <div
+                  className={`text-2xl font-bold font-mono tabular-nums ${
+                    netFyBalance >= 0 ? 'text-sky-400' : 'text-rose-400'
+                  }`}
+                >
+                  {formatINR(netFyBalance)}
+                </div>
+                <span className="text-[11px] text-slate-500 font-mono block">
+                  {netFyBalance >= 0 ? 'Positive church surplus' : 'Outflows exceed collections'}
+                </span>
+              </div>
+            </>
+          )}
+
+          {/* This Month Collections */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-2">
             <span className="text-xs text-slate-400 font-medium block">
               This Month ({monthSummary.monthLabel})
@@ -340,7 +455,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
         </div>
       )}
 
-      {/* ANALYTICS CHARTS (Staff: Church-wide | Member: Personal Giving) */}
+      {/* ANALYTICS CHARTS (Admin/Accountant: Collections + Expenses + Cash Flow | Collector/Member: Donations only) */}
       {(isStaff || isMember) && (
         <DashboardAnalytics
           fyLabel={currentFY.label}
@@ -349,73 +464,150 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onNavigate }) 
           monthlyTrend={monthlyTrend}
           categoryBreakdown={categoryBreakdown}
           onRecordDonation={isStaff ? () => onNavigate('record_donation') : undefined}
+          canViewExpenses={isAdminOrAccountant}
+          monthlyCashFlow={monthlyCashFlow}
+          expenseCategoryBreakdown={expenseCategoryBreakdown}
+          onOpenExpenses={isAdminOrAccountant ? () => onNavigate('expenses') : undefined}
         />
       )}
 
-      {/* Recent Receipts Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
-          <h2 className="text-xs font-semibold text-white tracking-tight">
-            {isMember ? 'My Recent Receipts' : 'Recent Valid Collections'}
-          </h2>
-          <button
-            type="button"
-            onClick={() => onNavigate(isMember ? 'reports' : 'donations')}
-            className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
-          >
-            <span>View All</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
+      {/* Recent Transactions Tables */}
+      <div className={`grid grid-cols-1 ${isAdminOrAccountant ? 'lg:grid-cols-2' : ''} gap-4`}>
+        {/* Recent Receipts Table */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+          <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+            <h2 className="text-xs font-semibold text-white tracking-tight">
+              {isMember ? 'My Recent Receipts' : 'Recent Valid Collections'}
+            </h2>
+            <button
+              type="button"
+              onClick={() => onNavigate(isMember ? 'reports' : 'donations')}
+              className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
+            >
+              <span>View All</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 bg-slate-950/30 text-slate-400 font-medium">
-                <th className="py-2.5 px-4 font-mono">Receipt #</th>
-                <th className="py-2.5 px-4">Date</th>
-                {!isMember && <th className="py-2.5 px-4">Member</th>}
-                <th className="py-2.5 px-4 text-right">Amount (₹)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800/60 text-slate-300">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={isMember ? 3 : 4} className="py-6 text-center text-slate-500">
-                    Loading recent records...
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-slate-800 bg-slate-950/30 text-slate-400 font-medium">
+                  <th className="py-2.5 px-4 font-mono">Receipt #</th>
+                  <th className="py-2.5 px-4">Date</th>
+                  {!isMember && <th className="py-2.5 px-4">Member</th>}
+                  <th className="py-2.5 px-4 text-right">Amount (₹)</th>
                 </tr>
-              ) : recentDonations.length === 0 ? (
-                <tr>
-                  <td colSpan={isMember ? 3 : 4} className="py-6 text-center text-slate-500">
-                    No donations recorded for {currentFY.label} yet.
-                  </td>
-                </tr>
-              ) : (
-                recentDonations.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-800/40">
-                    <td className="py-2.5 px-4 font-mono font-medium text-sky-400">
-                      {d.receipt_number}
-                    </td>
-                    <td className="py-2.5 px-4 font-mono tabular-nums text-slate-400">
-                      {d.donation_date}
-                    </td>
-                    {!isMember && (
-                      <td className="py-2.5 px-4 font-medium text-white">
-                        {d.member?.full_name || 'Member'}
-                      </td>
-                    )}
-                    <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-400">
-                      {formatINR(Number(d.amount))}
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={isMember ? 3 : 4} className="py-6 text-center text-slate-500">
+                      Loading recent records...
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : recentDonations.length === 0 ? (
+                  <tr>
+                    <td colSpan={isMember ? 3 : 4} className="py-6 text-center text-slate-500">
+                      No donations recorded for {currentFY.label} yet.
+                    </td>
+                  </tr>
+                ) : (
+                  recentDonations.map((d) => (
+                    <tr key={d.id} className="hover:bg-slate-800/40">
+                      <td className="py-2.5 px-4 font-mono font-medium text-sky-400">
+                        {d.receipt_number}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono tabular-nums text-slate-400">
+                        {d.donation_date}
+                      </td>
+                      {!isMember && (
+                        <td className="py-2.5 px-4 font-medium text-white">
+                          {d.member?.full_name || 'Member'}
+                        </td>
+                      )}
+                      <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-emerald-400">
+                        {formatINR(Number(d.amount))}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
+
+        {/* Recent Expenses Table (Strictly Admin & Accountant) */}
+        {isAdminOrAccountant && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+            <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
+              <h2 className="text-xs font-semibold text-white tracking-tight">
+                Recent Church Expenses
+              </h2>
+              <button
+                type="button"
+                onClick={() => onNavigate('expenses')}
+                className="text-xs text-amber-400 hover:text-amber-300 flex items-center gap-1 font-medium transition-colors cursor-pointer"
+              >
+                <span>View All</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 bg-slate-950/30 text-slate-400 font-medium">
+                    <th className="py-2.5 px-4">Date</th>
+                    <th className="py-2.5 px-4">Payee</th>
+                    <th className="py-2.5 px-4">Category</th>
+                    <th className="py-2.5 px-4 text-right">Amount (₹)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-slate-500">
+                        Loading recent expenses...
+                      </td>
+                    </tr>
+                  ) : recentExpenses.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-6 text-center text-slate-500">
+                        No expenses recorded for {currentFY.label} yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    recentExpenses.map((e) => {
+                      const catName = Array.isArray(e.category)
+                        ? e.category[0]?.name
+                        : e.category?.name;
+                      return (
+                        <tr key={e.id} className="hover:bg-slate-800/40">
+                          <td className="py-2.5 px-4 font-mono tabular-nums text-slate-400">
+                            {e.expense_date}
+                          </td>
+                          <td className="py-2.5 px-4 font-medium text-white">
+                            {e.payee_name}
+                          </td>
+                          <td className="py-2.5 px-4 text-slate-300">
+                            {catName || 'Category'}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono tabular-nums font-bold text-amber-400">
+                            {formatINR(Number(e.amount))}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
+
 

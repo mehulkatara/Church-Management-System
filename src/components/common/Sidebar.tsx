@@ -15,12 +15,14 @@ import {
   UserCog,
   Settings,
   User,
+  Wallet,
 } from 'lucide-react';
 
 export type ScreenId =
   | 'dashboard'
   | 'record_donation'
   | 'donations'
+  | 'expenses'
   | 'members'
   | 'approvals'
   | 'categories'
@@ -99,6 +101,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span>Donation Registry</span>
               </div>
             </button>
+
+            {isAccountantOrAdmin && (
+              <button onClick={() => handleNav('expenses')} className={navItemClass('expenses')}>
+                <div className="flex items-center gap-2.5">
+                  <Wallet className="w-4 h-4" />
+                  <span>Expenses</span>
+                </div>
+              </button>
+            )}
 
             <button onClick={() => handleNav('members')} className={navItemClass('members')}>
               <div className="flex items-center gap-2.5">

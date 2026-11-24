@@ -790,3 +790,153 @@ test('Dashboard analytics helpers compute current month summary, Apr-Mar FY tren
   });
 });
 
+import {
+  validateExpenseInput,
+  computeExpenseCurrentMonthSummary,
+  buildMonthlyExpenseFyTrend,
+  buildExpenseCategoryBreakdown,
+  buildMonthlyCashFlowTrend,
+} from './domain-logic';
+
+test('validateExpenseInput enforces positive amount, required fields, and sanitizes optional fields', () => {
+  assert.equal(
+    validateExpenseInput({
+      amount: 0,
+      expenseDate: '2026-11-10',
+      categoryId: 'cat-1',
+      paidFromAccountId: 'acc-1',
+      paymentMethod: 'Cash',
+      payeeName: 'EB Office',
+    }).valid,
+    false
+  );
+
+  assert.equal(
+    validateExpenseInput({
+      amount: 1200,
+      expenseDate: '2026-11-10',
+      categoryId: 'cat-1',
+      paidFromAccountId: 'acc-1',
+      paymentMethod: 'Cash',
+      payeeName: '   ',
+    }).valid,
+    false
+  );
+
+  assert.equal(
+    validateExpenseInput({
+      amount: 1200,
+      expenseDate: '2026-11-10',
+      categoryId: '',
+      paidFromAccountId: 'acc-1',
+      paymentMethod: 'UPI',
+      payeeName: 'TNEB',
+    }).valid,
+    false
+  );
+
+  const validRes = validateExpenseInput({
+    amount: '2450.5',
+    expenseDate: '2026-11-10',
+    categoryId: 'cat-1',
+    paidFromAccountId: 'acc-1',
+    paymentMethod: 'Bank Transfer',
+    payeeName: '  Tamil Nadu Electricity Board  ',
+    billReference: '  INV-2026-99  ',
+    notes: '   ',
+  });
+
+  assert.equal(validRes.valid, true);
+  assert.deepEqual(validRes.sanitized, {
+    amount: 2450.5,
+    expenseDate: '2026-11-10',
+    categoryId: 'cat-1',
+    paidFromAccountId: 'acc-1',
+    paymentMethod: 'Bank Transfer',
+    payeeName: 'Tamil Nadu Electricity Board',
+    billReference: 'INV-2026-99',
+    notes: null,
+  });
+});
+
+test('Expense analytics and net cash-flow helpers exclude cancelled entries and compute church-scoped totals accurately', () => {
+  const sampleDonations = [
+    {
+      donation_date: '2026-04-05',
+      amount: 5000,
+      deleted_at: null,
+      category: { name: 'Tithe' },
+    },
+    {
+      donation_date: '2026-11-15',
+      amount: 3200,
+      deleted_at: null,
+      category: { name: 'Offering' },
+    },
+  ];
+
+  const sampleExpenses = [
+    {
+      expense_date: '2026-04-12',
+      amount: 1500,
+      deleted_at: null,
+      category: { name: 'Utilities' },
+    },
+    {
+      expense_date: '2026-11-08',
+      amount: 4000,
+      deleted_at: null,
+      category: { name: 'Staff Salaries' },
+    },
+    {
+      expense_date: '2026-11-19',
+      amount: 1000,
+      deleted_at: null,
+      category: { name: 'Utilities' },
+    },
+    {
+      expense_date: '2026-11-22',
+      amount: 7500,
+      deleted_at: '2026-11-22T09:00:00Z', // cancelled must be excluded
+      category: { name: 'Cancelled Vendor Bill' },
+    },
+  ];
+
+  const monthExp = computeExpenseCurrentMonthSummary(sampleExpenses, '2026-11-22');
+  assert.equal(monthExp.monthKey, '2026-11');
+  assert.equal(monthExp.totalAmount, 5000);
+  assert.equal(monthExp.entryCount, 2);
+
+  const expTrend = buildMonthlyExpenseFyTrend(sampleExpenses, 2026, '2026-11-22');
+  assert.equal(expTrend.length, 12);
+  assert.equal(expTrend[0].totalAmount, 1500);
+  assert.equal(expTrend[7].totalAmount, 5000);
+  assert.equal(expTrend[7].isCurrentMonth, true);
+
+  const expBreakdown = buildExpenseCategoryBreakdown(sampleExpenses);
+  assert.equal(expBreakdown.length, 2);
+  assert.deepEqual(expBreakdown[0], {
+    categoryName: 'Staff Salaries',
+    totalAmount: 4000,
+    entryCount: 1,
+    percentage: 61.5,
+  });
+  assert.deepEqual(expBreakdown[1], {
+    categoryName: 'Utilities',
+    totalAmount: 2500,
+    entryCount: 2,
+    percentage: 38.5,
+  });
+
+  const cashFlow = buildMonthlyCashFlowTrend(sampleDonations, sampleExpenses, 2026, '2026-11-22');
+  assert.equal(cashFlow[0].collectionsAmount, 5000);
+  assert.equal(cashFlow[0].expensesAmount, 1500);
+  assert.equal(cashFlow[0].netAmount, 3500);
+
+  assert.equal(cashFlow[7].collectionsAmount, 3200);
+  assert.equal(cashFlow[7].expensesAmount, 5000);
+  assert.equal(cashFlow[7].netAmount, -1800);
+  assert.equal(cashFlow[7].isCurrentMonth, true);
+});
+
+

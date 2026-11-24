@@ -255,8 +255,8 @@ VITE_SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
                     Open your Supabase Project Dashboard &rarr; <strong>SQL Editor</strong> &rarr; New Query.
                     Copy and run the contents from the <strong>Database Migrations (SQL)</strong> tab:
                     <ul className="list-disc list-inside mt-1 text-slate-400 text-xs space-y-1">
-                      <li>Fresh setup / reset: <code>supabase/complete_schema.sql</code> (All 19 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
-                      <li>Incremental deployments: run new files from <code>supabase/migrations/</code> (e.g., <code>20261116000001_member_share_links.sql</code>)</li>
+                      <li>Fresh setup / reset: <code>supabase/complete_schema.sql</code> (All 21 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
+                      <li>Incremental deployments: run new files from <code>supabase/migrations/</code> (e.g., <code>20261124000001_church_expenses_and_categories.sql</code>)</li>
                     </ul>
                   </div>
                 </li>
@@ -336,7 +336,7 @@ WHERE email = 'admin@yourchurch.org';`}
                     Canonical Schema &amp; Incremental Deployment Migrations
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Full latest schema: <code>supabase/complete_schema.sql</code> (19 tables, RLS policies, triggers &amp; RPCs) &middot; Per-change deployable files: <code>supabase/migrations/*.sql</code>
+                    Full latest schema: <code>supabase/complete_schema.sql</code> (21 tables, RLS policies, triggers &amp; RPCs) &middot; Per-change deployable files: <code>supabase/migrations/*.sql</code>
                   </p>
                 </div>
                 <button
@@ -360,20 +360,22 @@ WHERE email = 'admin@yourchurch.org';`}
                 <p>9. 20261121000003_category_code_optional_and_active_leaderboard.sql &mdash; Remove category code DB requirement &amp; active-only member portal leaderboard</p>
                 <p>10. 20261121000004_android_sms_gateway_plan_b.sql &mdash; Plan B Android SMS Gateway credential store &amp; secure RPCs</p>
                 <p>11. 20261122000001_merge_receipt_registry_into_donations.sql &mdash; Merge receipt_number_registry into donations (active receipt index; reuse corrected/cancelled receipts)</p>
+                <p>12. 20261124000001_church_expenses_and_categories.sql &mdash; Per-church expense_categories, expenses table, RLS &amp; 3 expense RPCs</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- All 19 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
+                <p className="text-sky-400">-- All 21 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
-                <p>member_share_links, access_requests, donation_categories, receiving_accounts, donations,</p>
-                <p>donation_revisions, audit_logs, church_settings, church_sms_gateways, notifications,</p>
-                <p>notification_jobs, notification_attempts, report_exports</p>
+                <p>member_share_links, access_requests, donation_categories, expense_categories, receiving_accounts,</p>
+                <p>donations, donation_revisions, expenses, audit_logs, church_settings, church_sms_gateways,</p>
+                <p>notifications, notification_jobs, notification_attempts, report_exports</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
                 <p className="text-emerald-400">-- Atomic procedures, triggers &amp; Edge Functions included:</p>
                 <p>&bull; <code>handle_new_user()</code>: sync auth.users sign-ups into public.profiles</p>
                 <p>&bull; <code>record_donation()</code>, <code>correct_donation()</code>, <code>cancel_donation()</code></p>
+                <p>&bull; <code>record_expense()</code>, <code>correct_expense()</code>, <code>cancel_expense()</code></p>
                 <p>&bull; <code>change_member_status()</code> &amp; <code>update_my_member_profile()</code></p>
                 <p>&bull; <code>create_member_share_link()</code>, <code>revoke_member_share_link()</code>, <code>redeem_member_share_link()</code></p>
                 <p>&bull; <code>get_church_sms_gateway_status()</code> &amp; <code>upsert_church_sms_gateway()</code></p>
@@ -468,6 +470,13 @@ WHERE email = 'admin@yourchurch.org';`}
                       <td className="py-2 px-3 font-medium text-white">Edit / Cancel Donation</td>
                       <td className="py-2 px-3 text-emerald-400">Yes (Reason req.)</td>
                       <td className="py-2 px-3 text-emerald-400">Yes (Reason req.)</td>
+                      <td className="py-2 px-3 text-red-400">No</td>
+                      <td className="py-2 px-3 text-red-400">No</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-3 font-medium text-white">Manage Expenses &amp; Expense Categories</td>
+                      <td className="py-2 px-3 text-emerald-400">Yes (Reason req. on edit/cancel)</td>
+                      <td className="py-2 px-3 text-emerald-400">Yes (Reason req. on edit/cancel)</td>
                       <td className="py-2 px-3 text-red-400">No</td>
                       <td className="py-2 px-3 text-red-400">No</td>
                     </tr>

@@ -60,3 +60,15 @@ VALUES
   ('a1000000-0000-0000-0000-000000000001', 'sms_provider', '{"mode": "android_sms_gateway", "provider_enabled": false}'::jsonb),
   ('a2000000-0000-0000-0000-000000000002', 'sms_provider', '{"mode": "android_sms_gateway", "provider_enabled": false}'::jsonb)
 ON CONFLICT (church_id, setting_key) DO NOTHING;
+
+-- 6. Insert Per-Church Sample Expense Categories
+INSERT INTO public.expense_categories (id, church_id, name, is_active)
+VALUES
+  ('e1000000-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000001', 'Utilities & Electricity', true),
+  ('e1000000-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000001', 'Staff Salaries & Stipends', true),
+  ('e1000000-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000001', 'Building Maintenance', true),
+  ('e1000000-0000-0000-0000-000000000004', 'a1000000-0000-0000-0000-000000000001', 'Missions & Outreach', true),
+  ('e2000000-0000-0000-0000-000000000001', 'a2000000-0000-0000-0000-000000000002', 'Electricity & Water', true),
+  ('e2000000-0000-0000-0000-000000000002', 'a2000000-0000-0000-0000-000000000002', 'Ministry Supplies', true),
+  ('e2000000-0000-0000-0000-000000000003', 'a2000000-0000-0000-0000-000000000002', 'Charity & Relief', true)
+ON CONFLICT (id) DO NOTHING;

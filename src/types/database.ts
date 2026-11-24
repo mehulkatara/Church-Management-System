@@ -112,6 +112,14 @@ export interface DonationCategory {
   created_at: string;
 }
 
+export interface ExpenseCategory {
+  id: string;
+  church_id: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface ReceivingAccount {
   id: string;
   church_id: string;
@@ -121,6 +129,29 @@ export interface ReceivingAccount {
   account_number_mask: string | null;
   is_active: boolean;
   created_at: string;
+}
+
+export interface Expense {
+  id: string;
+  church_id: string;
+  expense_date: string;
+  category_id: string;
+  paid_from_account_id: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  payee_name: string;
+  bill_reference: string | null;
+  notes: string | null;
+  idempotency_key: string | null;
+  created_at: string;
+  created_by: string | null;
+  updated_at: string;
+  updated_by: string | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
+  deletion_reason: string | null;
+  category?: ExpenseCategory;
+  paid_from_account?: ReceivingAccount;
 }
 
 export interface Donation {

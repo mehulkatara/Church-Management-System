@@ -105,6 +105,7 @@ export const AuditHistoryScreen: React.FC = () => {
         >
           <option value="">All Entities</option>
           <option value="donation">Donations</option>
+          <option value="expense">Expenses</option>
           <option value="member">Members</option>
           <option value="access_request">Access Requests</option>
           <option value="church">Church Settings</option>

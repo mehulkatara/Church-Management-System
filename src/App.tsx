@@ -11,6 +11,7 @@ import { ApprovalStatusScreen } from './components/screens/ApprovalStatusScreen'
 import { DashboardScreen } from './components/screens/DashboardScreen';
 import { RecordDonationScreen } from './components/screens/RecordDonationScreen';
 import { DonationsScreen } from './components/screens/DonationsScreen';
+import { ExpensesScreen } from './components/screens/ExpensesScreen';
 import { MembersScreen } from './components/screens/MembersScreen';
 import { AccessApprovalsScreen } from './components/screens/AccessApprovalsScreen';
 import { CategoriesScreen } from './components/screens/CategoriesScreen';
@@ -120,6 +121,8 @@ const MainAppContent: React.FC<{
         return <RecordDonationScreen />;
       case 'donations':
         return <DonationsScreen />;
+      case 'expenses':
+        return <ExpensesScreen onNavigate={setCurrentScreen} />;
       case 'members':
         return <MembersScreen />;
       case 'approvals':
@@ -168,6 +171,7 @@ const MainAppContent: React.FC<{
               <option value="dashboard">Dashboard</option>
               <option value="record_donation">Record Donation</option>
               <option value="donations">Donation Registry</option>
+              <option value="expenses">Church Expenses</option>
               <option value="members">Member Directory</option>
               <option value="approvals">Access Approvals (Side-by-Side)</option>
               <option value="categories">Categories &amp; Accounts</option>
