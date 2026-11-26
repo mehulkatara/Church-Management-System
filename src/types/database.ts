@@ -107,7 +107,6 @@ export interface DonationCategory {
   id: string;
   church_id: string;
   name: string;
-  code?: string | null;
   is_active: boolean;
   created_at: string;
 }
@@ -204,7 +203,6 @@ export interface AuditLog {
   previous_state: Record<string, unknown> | null;
   new_state: Record<string, unknown> | null;
   reason: string | null;
-  client_ip: string | null;
   created_at: string;
   actor_profile?: Profile;
 }

@@ -42,14 +42,14 @@ Applicant gains verified Member access to their own statements & ranking.
 
 ---
 
-## 2. Applying Migrations
+## 2. Applying the Database Schema
 
 Open the **SQL Editor** in your Supabase project dashboard:
 
-1. **Complete Schema, RLS & Atomic Procedures**: Execute `supabase/migrations/20261115000001_complete_schema.sql`.
-   - Creates all 18 tables, constraints, indexes, and the `auth.users` -> `public.profiles` trigger.
-   - Enables Row Level Security (RLS) on all 18 tables with role-isolated policies.
-   - Installs all atomic `SECURITY DEFINER` RPCs (`record_donation`, `correct_donation`, `cancel_donation`, `change_member_status`, `submit_profile_request`, `approve_access_request_v2`, `return_access_request_for_correction`, `update_my_member_profile`, `get_church_staff_management_data`, `assign_church_staff_role`, `toggle_church_staff_status`).
+1. **Complete Schema, RLS & Atomic Procedures**: Execute `supabase/complete_schema.sql`.
+   - Creates all 21 tables, constraints, indexes, and the `auth.users` -> `public.profiles` trigger.
+   - Enables Row Level Security (RLS) on all 21 tables with role-isolated policies.
+   - Installs all atomic `SECURITY DEFINER` RPCs (`record_donation`, `correct_donation`, `cancel_donation`, `record_expense`, `correct_expense`, `cancel_expense`, `change_member_status`, `submit_profile_request`, `approve_access_request_v2`, `return_access_request_for_correction`, `update_my_member_profile`, `get_church_staff_management_data`, `assign_church_staff_role`, `toggle_church_staff_status`).
 
 ---
 

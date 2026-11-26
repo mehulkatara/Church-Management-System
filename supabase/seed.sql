@@ -12,21 +12,21 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- 2. Insert Standard Donation Categories for Church 1
-INSERT INTO public.donation_categories (id, church_id, name, code, is_active)
+INSERT INTO public.donation_categories (id, church_id, name, is_active)
 VALUES
-  ('c1000000-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000001', 'Tithe', 'TITHE', true),
-  ('c1000000-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000001', 'Offering', 'OFFERING', true),
-  ('c1000000-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000001', 'Building Fund', 'BLDG_FUND', true),
-  ('c1000000-0000-0000-0000-000000000004', 'a1000000-0000-0000-0000-000000000001', 'Missions', 'MISSIONS', true),
-  ('c1000000-0000-0000-0000-000000000005', 'a1000000-0000-0000-0000-000000000005', 'Special Collection', 'SPECIAL', true)
+  ('c1000000-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000001', 'Tithe', true),
+  ('c1000000-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000001', 'Offering', true),
+  ('c1000000-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000001', 'Building Fund', true),
+  ('c1000000-0000-0000-0000-000000000004', 'a1000000-0000-0000-0000-000000000001', 'Missions', true),
+  ('c1000000-0000-0000-0000-000000000005', 'a1000000-0000-0000-0000-000000000001', 'Special Collection', true)
 ON CONFLICT (id) DO NOTHING;
 
 -- Categories for Church 2
-INSERT INTO public.donation_categories (id, church_id, name, code, is_active)
+INSERT INTO public.donation_categories (id, church_id, name, is_active)
 VALUES
-  ('c2000000-0000-0000-0000-000000000001', 'a2000000-0000-0000-0000-000000000002', 'Tithe', 'TITHE', true),
-  ('c2000000-0000-0000-0000-000000000002', 'a2000000-0000-0000-0000-000000000002', 'Sunday Offering', 'OFFERING', true),
-  ('c2000000-0000-0000-0000-000000000003', 'a2000000-0000-0000-0000-000000000002', 'Youth Outreach', 'YOUTH', true)
+  ('c2000000-0000-0000-0000-000000000001', 'a2000000-0000-0000-0000-000000000002', 'Tithe', true),
+  ('c2000000-0000-0000-0000-000000000002', 'a2000000-0000-0000-0000-000000000002', 'Sunday Offering', true),
+  ('c2000000-0000-0000-0000-000000000003', 'a2000000-0000-0000-0000-000000000002', 'Youth Outreach', true)
 ON CONFLICT (id) DO NOTHING;
 
 -- 3. Insert Receiving Accounts for Church 1
@@ -45,13 +45,13 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- 4. Insert Fictional Members for Church 1
-INSERT INTO public.members (id, church_id, member_number, full_name, contact_phone, contact_email, village_name, gender, joining_date, membership_status)
+INSERT INTO public.members (id, church_id, member_number, full_name, contact_phone, village_name, gender, joining_date, membership_status)
 VALUES
-  ('m1000000-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000001', 'M-0001', 'Ebenezer Raj', '+91 98401 22334', 'ebenezer.raj@example.com', 'Tambaram', 'male', '2024-01-15', 'active'),
-  ('m1000000-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000001', 'M-0002', 'Grace Hannah', '+91 98402 33445', 'grace.hannah@example.com', 'Guindy', 'female', '2024-02-01', 'active'),
-  ('m1000000-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000001', 'M-0003', 'Samuel Jayakumar', '+91 98403 44556', 'samuel.j@example.com', 'Velachery', 'male', '2024-05-10', 'active'),
-  ('m1000000-0000-0000-0000-000000000004', 'a1000000-0000-0000-0000-000000000001', 'M-0004', 'Deborah Selvi', '+91 98404 55667', 'deborah.s@example.com', 'Tambaram', 'female', '2025-01-20', 'inactive'),
-  ('m1000000-0000-0000-0000-000000000005', 'a1000000-0000-0000-0000-000000000001', 'M-0005', 'Paul Vijay', '+91 98405 66778', 'paul.vijay@example.com', 'Adyar', 'male', '2025-04-12', 'active')
+  ('m1000000-0000-0000-0000-000000000001', 'a1000000-0000-0000-0000-000000000001', 'M-0001', 'Ebenezer Raj', '+91 98401 22334', 'Tambaram', 'male', '2024-01-15', 'active'),
+  ('m1000000-0000-0000-0000-000000000002', 'a1000000-0000-0000-0000-000000000001', 'M-0002', 'Grace Hannah', '+91 98402 33445', 'Guindy', 'female', '2024-02-01', 'active'),
+  ('m1000000-0000-0000-0000-000000000003', 'a1000000-0000-0000-0000-000000000001', 'M-0003', 'Samuel Jayakumar', '+91 98403 44556', 'Velachery', 'male', '2024-05-10', 'active'),
+  ('m1000000-0000-0000-0000-000000000004', 'a1000000-0000-0000-0000-000000000001', 'M-0004', 'Deborah Selvi', '+91 98404 55667', 'Tambaram', 'female', '2025-01-20', 'inactive'),
+  ('m1000000-0000-0000-0000-000000000005', 'a1000000-0000-0000-0000-000000000001', 'M-0005', 'Paul Vijay', '+91 98405 66778', 'Adyar', 'male', '2025-04-12', 'active')
 ON CONFLICT (id) DO NOTHING;
 
 -- 5. Insert Church Settings (SMS Plan B gateway status placeholder)

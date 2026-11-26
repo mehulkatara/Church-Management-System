@@ -1,9 +1,8 @@
 -- ==============================================================================
 -- CHURCH MANAGEMENT SYSTEM - ALWAYS-UPDATED COMPLETE SCHEMA & FULL RESET SCRIPT
 -- File: supabase/complete_schema.sql
--- Note: Incremental deployment migrations are maintained separately per change in
---       supabase/migrations/*.sql. This file always mirrors the latest complete
---       schema (currently 21 tables, RLS policies, triggers, and RPCs).
+-- Note: Canonical single-file PostgreSQL schema (currently 21 tables, RLS
+--       policies, triggers, and atomic RPCs).
 -- WARNING: DESTRUCTIVE RESET!
 -- Running this script deletes ALL existing tables, views, functions, triggers,
 -- policies, and data in the `public` schema, then recreates everything cleanly:
@@ -181,7 +180,6 @@ CREATE TABLE IF NOT EXISTS public.members (
     member_number TEXT NOT NULL,
     full_name TEXT NOT NULL,
     contact_phone TEXT,
-    contact_email TEXT, -- Deprecated for members (auth email lives in auth.users/profiles); kept nullable for legacy/seed compatibility
     village_name TEXT,
     gender TEXT CHECK (gender IN ('male', 'female', 'other', 'prefer_not_to_say')),
     date_of_birth DATE,
@@ -240,7 +238,6 @@ CREATE TABLE IF NOT EXISTS public.donation_categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    code TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
@@ -315,7 +312,6 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
     previous_state JSONB,
     new_state JSONB,
     reason TEXT,
-    client_ip TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_church ON public.audit_logs(church_id, created_at DESC);
@@ -2013,7 +2009,7 @@ BEGIN
 END;
 $$;
 
--- 6. APPROVE ACCESS REQUEST (Legacy signature preserved; clears member contact_email)
+-- 6. APPROVE ACCESS REQUEST (Legacy signature preserved)
 CREATE OR REPLACE FUNCTION public.approve_access_request(
     p_request_id UUID,
     p_member_id UUID,
@@ -2062,7 +2058,6 @@ BEGIN
         IF p_gender IS NOT NULL AND p_gender IN ('male', 'female', 'other', 'prefer_not_to_say') THEN
             UPDATE public.members SET gender = p_gender WHERE id = v_final_member_id;
         END IF;
-        UPDATE public.members SET contact_email = NULL WHERE id = v_final_member_id;
     ELSE
         v_member_number := public.generate_next_church_member_number(v_req.church_id);
 
@@ -2071,7 +2066,6 @@ BEGIN
             member_number,
             full_name,
             contact_phone,
-            contact_email,
             village_name,
             gender,
             joining_date,
@@ -2083,7 +2077,6 @@ BEGIN
             v_member_number,
             COALESCE(trim(p_create_member_name), v_req.applicant_name),
             v_req.applicant_phone,
-            NULL,
             trim(p_village_name),
             p_gender,
             CURRENT_DATE,
@@ -2155,7 +2148,7 @@ BEGIN
 END;
 $$;
 
--- 7. APPROVE ACCESS REQUEST V2 (Field-by-field review, Indian mobile validation, no duplicate member contact_email)
+-- 7. APPROVE ACCESS REQUEST V2 (Field-by-field review, Indian mobile validation)
 CREATE OR REPLACE FUNCTION public.approve_access_request_v2(
     p_request_id UUID,
     p_expected_version INT,
@@ -2164,7 +2157,6 @@ CREATE OR REPLACE FUNCTION public.approve_access_request_v2(
     p_final_full_name TEXT DEFAULT NULL,
     p_final_date_of_birth DATE DEFAULT NULL,
     p_final_phone TEXT DEFAULT NULL,
-    p_final_contact_email TEXT DEFAULT NULL,
     p_final_village_name TEXT DEFAULT NULL,
     p_final_gender TEXT DEFAULT NULL
 )
@@ -2251,7 +2243,6 @@ BEGIN
             member_number,
             full_name,
             contact_phone,
-            contact_email,
             village_name,
             gender,
             date_of_birth,
@@ -2264,7 +2255,6 @@ BEGIN
             v_member_number,
             trim(p_final_full_name),
             v_clean_phone,
-            NULL,
             trim(p_final_village_name),
             p_final_gender,
             p_final_date_of_birth,
@@ -2300,7 +2290,6 @@ BEGIN
         SET
             full_name = trim(p_final_full_name),
             contact_phone = v_clean_phone,
-            contact_email = NULL,
             village_name = trim(p_final_village_name),
             gender = p_final_gender,
             date_of_birth = p_final_date_of_birth,
@@ -2391,6 +2380,12 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.approve_access_request(UUID, UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.approve_access_request(UUID, UUID, TEXT, TEXT, TEXT) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.approve_access_request_v2(UUID, INT, UUID, BOOLEAN, TEXT, DATE, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.approve_access_request_v2(UUID, INT, UUID, BOOLEAN, TEXT, DATE, TEXT, TEXT, TEXT) TO authenticated;
+
 -- 8. RETURN ACCESS REQUEST FOR CORRECTION
 CREATE OR REPLACE FUNCTION public.return_access_request_for_correction(
     p_request_id UUID,
@@ -2467,8 +2462,7 @@ CREATE OR REPLACE FUNCTION public.update_my_member_profile(
     p_church_id UUID,
     p_full_name TEXT,
     p_contact_phone TEXT,
-    p_gender TEXT,
-    p_contact_email TEXT DEFAULT NULL
+    p_gender TEXT
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -2616,8 +2610,8 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.update_my_member_profile(UUID, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.update_my_member_profile(UUID, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+REVOKE ALL ON FUNCTION public.update_my_member_profile(UUID, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.update_my_member_profile(UUID, TEXT, TEXT, TEXT) TO authenticated;
 
 -- 10. STAFF ACCESS MANAGEMENT RPCS (Accountants -> Collector from active linked members; Admins -> all staff roles)
 CREATE OR REPLACE FUNCTION public.get_church_staff_management_data(

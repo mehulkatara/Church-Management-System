@@ -366,7 +366,6 @@ export const AccessApprovalsScreen: React.FC = () => {
           p_final_full_name: finalFullName,
           p_final_date_of_birth: finalDateOfBirth,
           p_final_phone: finalPhone,
-          p_final_contact_email: null,
           p_final_village_name: finalVillageName,
           p_final_gender: finalGender,
         });

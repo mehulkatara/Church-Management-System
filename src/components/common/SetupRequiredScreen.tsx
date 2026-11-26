@@ -192,7 +192,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
             }`}
           >
             <FileCode className="w-4 h-4" />
-            Database Migrations (SQL)
+            Database Schema (SQL)
           </button>
           <button
             onClick={() => setActiveTab('seed')}
@@ -251,12 +251,11 @@ VITE_SUPABASE_PUBLISHABLE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
                     2
                   </span>
                   <div>
-                    <strong className="text-white block">Execute SQL Migrations in SQL Editor</strong>
+                    <strong className="text-white block">Execute Complete Schema SQL in SQL Editor</strong>
                     Open your Supabase Project Dashboard &rarr; <strong>SQL Editor</strong> &rarr; New Query.
-                    Copy and run the contents from the <strong>Database Migrations (SQL)</strong> tab:
+                    Copy and run the contents from the <strong>Database Schema (SQL)</strong> tab:
                     <ul className="list-disc list-inside mt-1 text-slate-400 text-xs space-y-1">
-                      <li>Fresh setup / reset: <code>supabase/complete_schema.sql</code> (All 21 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
-                      <li>Incremental deployments: run new files from <code>supabase/migrations/</code> (e.g., <code>20261124000001_church_expenses_and_categories.sql</code>)</li>
+                      <li>Canonical schema setup: <code>supabase/complete_schema.sql</code> (All 21 Tables, RLS Policies, Triggers &amp; Atomic RPCs)</li>
                     </ul>
                   </div>
                 </li>
@@ -333,10 +332,10 @@ WHERE email = 'admin@yourchurch.org';`}
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-white">
-                    Canonical Schema &amp; Incremental Deployment Migrations
+                    Canonical Complete Database Schema
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Full latest schema: <code>supabase/complete_schema.sql</code> (21 tables, RLS policies, triggers &amp; RPCs) &middot; Per-change deployable files: <code>supabase/migrations/*.sql</code>
+                    Single canonical schema: <code>supabase/complete_schema.sql</code> (21 tables, RLS policies, triggers &amp; atomic RPCs)
                   </p>
                 </div>
                 <button
@@ -346,21 +345,6 @@ WHERE email = 'admin@yourchurch.org';`}
                   <Copy className="w-3.5 h-3.5" />
                   {copiedSection === 'mig1' ? 'Copied Path!' : 'Copy Schema Path'}
                 </button>
-              </div>
-              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- Incremental migrations in supabase/migrations/ (apply sequentially for live deployments):</p>
-                <p>1. 20261115000001_complete_schema.sql &mdash; Initial baseline (18 tables, RLS policies &amp; core RPCs)</p>
-                <p>2. 20261116000001_member_share_links.sql &mdash; Single-use member portal share links, RLS &amp; 3 RPCs</p>
-                <p>3. 20261116000002_auto_receipt_prefix_numeric.sql &mdash; Remove receipt_prefix; auto church-code + FY prefix &amp; live duplicate check</p>
-                <p>4. 20261116000003_remove_leaderboard_privacy_policy.sql &mdash; Remove leaderboard privacy masking policy &amp; show full donor names</p>
-                <p>5. 20261117000001_church_url_slug.sql &mdash; Custom editable church URL slugs &amp; availability check</p>
-                <p>6. 20261118000001_root_church_slug_and_expired_link_redirect.sql &mdash; Root-level /&lt;slug&gt; route guards &amp; expired link church sign-in metadata</p>
-                <p>7. 20261121000001_church_code_member_numbers.sql &mdash; Church-code-prefixed new member IDs (&lt;CODE&gt;-1, ...) &amp; church code lock</p>
-                <p>8. 20261121000002_strict_church_creation_fields_and_code.sql &mdash; Mandatory church creation fields &amp; strict A&ndash;Z/0&ndash;9/- church code validation</p>
-                <p>9. 20261121000003_category_code_optional_and_active_leaderboard.sql &mdash; Remove category code DB requirement &amp; active-only member portal leaderboard</p>
-                <p>10. 20261121000004_android_sms_gateway_plan_b.sql &mdash; Plan B Android SMS Gateway credential store &amp; secure RPCs</p>
-                <p>11. 20261122000001_merge_receipt_registry_into_donations.sql &mdash; Merge receipt_number_registry into donations (active receipt index; reuse corrected/cancelled receipts)</p>
-                <p>12. 20261124000001_church_expenses_and_categories.sql &mdash; Per-church expense_categories, expenses table, RLS &amp; 3 expense RPCs</p>
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
