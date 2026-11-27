@@ -1,14 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../lib/supabase';
+import { supabase, supabaseConfig } from '../../lib/supabase';
 import type {
   DonationCategory,
   ExpenseCategory,
   ReceivingAccount,
   AccountType,
 } from '../../types/database';
+import {
+  extractSupabaseErrorMessage,
+  validateReceivingAccountInput,
+} from '../../lib/domain-logic';
 import { Modal } from '../common/Modals';
-import { FolderTree, Plus, Landmark, Wallet } from 'lucide-react';
+import { FolderTree, Plus, Landmark, Wallet, AlertCircle, Pencil } from 'lucide-react';
+
+function isMissingRpcError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const obj = err as Record<string, unknown>;
+  const code = typeof obj.code === 'string' ? obj.code : '';
+  const message = typeof obj.message === 'string' ? obj.message.toLowerCase() : '';
+  return (
+    code === 'PGRST202' ||
+    code === '42883' ||
+    message.includes('could not find the function') ||
+    (message.includes('function') && message.includes('does not exist'))
+  );
+}
+
+function isPreviewModeSession(): boolean {
+  if (typeof window !== 'undefined' && window.sessionStorage.getItem('cms_preview_persona')) {
+    return true;
+  }
+  return !supabaseConfig.isConfigured || !supabaseConfig.hasAnonKey;
+}
 
 export const CategoriesScreen: React.FC = () => {
   const { activeChurch } = useAuth();
@@ -17,6 +41,7 @@ export const CategoriesScreen: React.FC = () => {
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [accounts, setAccounts] = useState<ReceivingAccount[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   // Donation Category Modal
   const [isCatModalOpen, setIsCatModalOpen] = useState(false);
@@ -26,25 +51,83 @@ export const CategoriesScreen: React.FC = () => {
   const [isExpCatModalOpen, setIsExpCatModalOpen] = useState(false);
   const [expCatName, setExpCatName] = useState('');
 
-  // Account Modal
+  // Account Modal (Add & Edit)
   const [isAccModalOpen, setIsAccModalOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<ReceivingAccount | null>(null);
   const [accName, setAccName] = useState('');
   const [accType, setAccType] = useState<AccountType>('cash');
   const [bankName, setBankName] = useState('');
   const [accountNumberMask, setAccountNumberMask] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const isPreview = isPreviewModeSession();
+
   const fetchData = async () => {
-    if (!supabase || !activeChurch) {
+    if (!activeChurch) {
       setIsLoading(false);
       return;
     }
+
+    if (isPreview) {
+      const now = new Date().toISOString();
+      setCategories((prev) =>
+        prev.length > 0
+          ? prev
+          : [
+              { id: 'preview-cat-1', church_id: activeChurch.id, name: 'Tithe', is_active: true, created_at: now },
+              { id: 'preview-cat-2', church_id: activeChurch.id, name: 'Building Fund', is_active: true, created_at: now },
+            ]
+      );
+      setExpenseCategories((prev) =>
+        prev.length > 0
+          ? prev
+          : [
+              { id: 'preview-exp-1', church_id: activeChurch.id, name: 'Utilities & Electricity', is_active: true, created_at: now },
+              { id: 'preview-exp-2', church_id: activeChurch.id, name: 'Building Maintenance', is_active: true, created_at: now },
+            ]
+      );
+      setAccounts((prev) =>
+        prev.length > 0
+          ? prev
+          : [
+              {
+                id: 'preview-acc-1',
+                church_id: activeChurch.id,
+                account_name: 'Church General Cash',
+                account_type: 'cash',
+                bank_name: null,
+                account_number_mask: null,
+                is_active: true,
+                created_at: now,
+              },
+              {
+                id: 'preview-acc-2',
+                church_id: activeChurch.id,
+                account_name: 'SBI Main Church Account',
+                account_type: 'bank',
+                bank_name: 'State Bank of India',
+                account_number_mask: '•••• 8912',
+                is_active: true,
+                created_at: now,
+              },
+            ]
+      );
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
+    setPageError(null);
 
     try {
-      const [{ data: catData }, { data: expCatData }, { data: accData }] = await Promise.all([
+      const [
+        { data: catData, error: catError },
+        { data: expCatData, error: expCatError },
+        { data: accData, error: accError },
+      ] = await Promise.all([
         supabase
           .from('donation_categories')
           .select('*')
@@ -62,11 +145,16 @@ export const CategoriesScreen: React.FC = () => {
           .order('account_name'),
       ]);
 
+      if (catError) throw catError;
+      if (expCatError) throw expCatError;
+      if (accError) throw accError;
+
       setCategories((catData || []) as DonationCategory[]);
       setExpenseCategories((expCatData || []) as ExpenseCategory[]);
       setAccounts((accData || []) as ReceivingAccount[]);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Error fetching categories & accounts:', err);
+      setPageError(extractSupabaseErrorMessage(err, 'Unable to load categories and accounts.'));
     } finally {
       setIsLoading(false);
     }
@@ -74,14 +162,23 @@ export const CategoriesScreen: React.FC = () => {
 
   useEffect(() => {
     void fetchData();
-  }, [activeChurch]);
+  }, [activeChurch?.id]);
 
   const handleCreateCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || !activeChurch) return;
+    if (!activeChurch) {
+      setErrorMsg('No active church is selected.');
+      return;
+    }
+
     const trimmed = catName.trim();
     if (!trimmed) {
       setErrorMsg('Category name is required.');
+      return;
+    }
+
+    if (categories.some((c) => c.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+      setErrorMsg(`A donation category named "${trimmed}" already exists for this church.`);
       return;
     }
 
@@ -89,6 +186,20 @@ export const CategoriesScreen: React.FC = () => {
     setErrorMsg(null);
 
     try {
+      if (isPreview) {
+        const created: DonationCategory = {
+          id: `preview-cat-${Date.now()}`,
+          church_id: activeChurch.id,
+          name: trimmed,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        };
+        setCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+        setIsCatModalOpen(false);
+        setCatName('');
+        return;
+      }
+
       const { error } = await supabase.from('donation_categories').insert({
         church_id: activeChurch.id,
         name: trimmed,
@@ -101,7 +212,7 @@ export const CategoriesScreen: React.FC = () => {
       setCatName('');
       await fetchData();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to add category.');
+      setErrorMsg(extractSupabaseErrorMessage(err, 'Failed to add donation category.'));
     } finally {
       setIsSubmitting(false);
     }
@@ -109,10 +220,19 @@ export const CategoriesScreen: React.FC = () => {
 
   const handleCreateExpenseCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || !activeChurch) return;
+    if (!activeChurch) {
+      setErrorMsg('No active church is selected.');
+      return;
+    }
+
     const trimmed = expCatName.trim();
     if (!trimmed) {
       setErrorMsg('Expense category name is required.');
+      return;
+    }
+
+    if (expenseCategories.some((c) => c.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+      setErrorMsg(`An expense category named "${trimmed}" already exists for this church.`);
       return;
     }
 
@@ -120,6 +240,22 @@ export const CategoriesScreen: React.FC = () => {
     setErrorMsg(null);
 
     try {
+      if (isPreview) {
+        const created: ExpenseCategory = {
+          id: `preview-exp-${Date.now()}`,
+          church_id: activeChurch.id,
+          name: trimmed,
+          is_active: true,
+          created_at: new Date().toISOString(),
+        };
+        setExpenseCategories((prev) =>
+          [...prev, created].sort((a, b) => a.name.localeCompare(b.name))
+        );
+        setIsExpCatModalOpen(false);
+        setExpCatName('');
+        return;
+      }
+
       const { error } = await supabase.from('expense_categories').insert({
         church_id: activeChurch.id,
         name: trimmed,
@@ -132,12 +268,7 @@ export const CategoriesScreen: React.FC = () => {
       setExpCatName('');
       await fetchData();
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error
-          ? err.message
-          : err && typeof err === 'object' && 'message' in err
-            ? String((err as { message: unknown }).message)
-            : 'Failed to add expense category.';
+      const msg = extractSupabaseErrorMessage(err, 'Failed to add expense category.');
       if (msg.includes('uq_expense_categories_church_name') || msg.toLowerCase().includes('duplicate')) {
         setErrorMsg(`An expense category named "${trimmed}" already exists for this church.`);
       } else {
@@ -148,65 +279,270 @@ export const CategoriesScreen: React.FC = () => {
     }
   };
 
-  const handleCreateAccount = async (e: React.FormEvent) => {
+  const openAddAccountModal = () => {
+    setErrorMsg(null);
+    setEditingAccount(null);
+    setAccName('');
+    setAccType('cash');
+    setBankName('');
+    setAccountNumberMask('');
+    setIsAccModalOpen(true);
+  };
+
+  const openEditAccountModal = (account: ReceivingAccount) => {
+    setErrorMsg(null);
+    setEditingAccount(account);
+    setAccName(account.account_name);
+    setAccType(account.account_type);
+    setBankName(account.bank_name || '');
+    setAccountNumberMask(account.account_number_mask || '');
+    setIsAccModalOpen(true);
+  };
+
+  const handleSaveAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || !activeChurch) return;
+    if (!activeChurch) {
+      setErrorMsg('No active church is selected. Please select a church and try again.');
+      return;
+    }
+
+    const validation = validateReceivingAccountInput({
+      accountName: accName,
+      accountType: accType,
+      bankName,
+      accountNumberMask,
+      existingAccounts: accounts,
+      editingAccountId: editingAccount?.id || null,
+    });
+
+    if (!validation.valid) {
+      setErrorMsg(validation.error || 'Please verify the account details.');
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorMsg(null);
 
     try {
-      const { error } = await supabase.from('receiving_accounts').insert({
-        church_id: activeChurch.id,
-        account_name: accName.trim(),
-        account_type: accType,
-        bank_name: accType === 'bank' ? bankName.trim() : null,
-        account_number_mask: accType === 'bank' ? accountNumberMask.trim() : null,
-        is_active: true,
-      });
+      const { account_name, account_type, bank_name, account_number_mask } = validation.normalized;
 
-      if (error) throw error;
+      if (isPreview) {
+        if (editingAccount) {
+          setAccounts((prev) =>
+            prev
+              .map((a) =>
+                a.id === editingAccount.id
+                  ? { ...a, account_name, account_type, bank_name, account_number_mask }
+                  : a
+              )
+              .sort((a, b) => a.account_name.localeCompare(b.account_name))
+          );
+        } else {
+          const created: ReceivingAccount = {
+            id: `preview-acc-${Date.now()}`,
+            church_id: activeChurch.id,
+            account_name,
+            account_type,
+            bank_name,
+            account_number_mask,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          setAccounts((prev) =>
+            [...prev, created].sort((a, b) => a.account_name.localeCompare(b.account_name))
+          );
+        }
+
+        setIsAccModalOpen(false);
+        setEditingAccount(null);
+        setAccName('');
+        setAccType('cash');
+        setBankName('');
+        setAccountNumberMask('');
+        return;
+      }
+
+      if (editingAccount) {
+        const { error: rpcError } = await supabase.rpc('update_receiving_account', {
+          p_account_id: editingAccount.id,
+          p_account_name: account_name,
+          p_account_type: account_type,
+          p_bank_name: bank_name,
+          p_account_number_mask: account_number_mask,
+        });
+
+        if (rpcError) {
+          if (isMissingRpcError(rpcError)) {
+            const { error: updateError } = await supabase
+              .from('receiving_accounts')
+              .update({
+                account_name,
+                account_type,
+                bank_name,
+                account_number_mask,
+              })
+              .eq('id', editingAccount.id);
+
+            if (updateError) throw updateError;
+          } else {
+            throw rpcError;
+          }
+        }
+      } else {
+        const { error: rpcError } = await supabase.rpc('create_receiving_account', {
+          p_church_id: activeChurch.id,
+          p_account_name: account_name,
+          p_account_type: account_type,
+          p_bank_name: bank_name,
+          p_account_number_mask: account_number_mask,
+        });
+
+        if (rpcError) {
+          if (isMissingRpcError(rpcError)) {
+            const { error: insertError } = await supabase.from('receiving_accounts').insert({
+              church_id: activeChurch.id,
+              account_name,
+              account_type,
+              bank_name,
+              account_number_mask,
+              is_active: true,
+            });
+
+            if (insertError) throw insertError;
+          } else {
+            throw rpcError;
+          }
+        }
+      }
 
       setIsAccModalOpen(false);
+      setEditingAccount(null);
       setAccName('');
+      setAccType('cash');
       setBankName('');
       setAccountNumberMask('');
       await fetchData();
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to add account.');
+      setErrorMsg(
+        extractSupabaseErrorMessage(
+          err,
+          editingAccount ? 'Failed to update account.' : 'Failed to add account.'
+        )
+      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const toggleCategoryStatus = async (category: DonationCategory) => {
-    if (!supabase) return;
-    await supabase
-      .from('donation_categories')
-      .update({ is_active: !category.is_active })
-      .eq('id', category.id);
-    await fetchData();
+    setPageError(null);
+    if (isPreview) {
+      setCategories((prev) =>
+        prev.map((c) => (c.id === category.id ? { ...c, is_active: !c.is_active } : c))
+      );
+      return;
+    }
+    setTogglingId(category.id);
+    try {
+      const { error } = await supabase
+        .from('donation_categories')
+        .update({ is_active: !category.is_active })
+        .eq('id', category.id);
+      if (error) throw error;
+      await fetchData();
+    } catch (err: unknown) {
+      setPageError(extractSupabaseErrorMessage(err, 'Failed to update donation category status.'));
+    } finally {
+      setTogglingId(null);
+    }
   };
 
   const toggleExpenseCategoryStatus = async (category: ExpenseCategory) => {
-    if (!supabase) return;
-    await supabase
-      .from('expense_categories')
-      .update({ is_active: !category.is_active })
-      .eq('id', category.id);
-    await fetchData();
+    setPageError(null);
+    if (isPreview) {
+      setExpenseCategories((prev) =>
+        prev.map((c) => (c.id === category.id ? { ...c, is_active: !c.is_active } : c))
+      );
+      return;
+    }
+    setTogglingId(category.id);
+    try {
+      const { error } = await supabase
+        .from('expense_categories')
+        .update({ is_active: !category.is_active })
+        .eq('id', category.id);
+      if (error) throw error;
+      await fetchData();
+    } catch (err: unknown) {
+      setPageError(extractSupabaseErrorMessage(err, 'Failed to update expense category status.'));
+    } finally {
+      setTogglingId(null);
+    }
   };
 
   const toggleAccountStatus = async (account: ReceivingAccount) => {
-    if (!supabase) return;
-    await supabase
-      .from('receiving_accounts')
-      .update({ is_active: !account.is_active })
-      .eq('id', account.id);
-    await fetchData();
+    setPageError(null);
+    const nextActive = !account.is_active;
+    if (isPreview) {
+      setAccounts((prev) =>
+        prev.map((a) => (a.id === account.id ? { ...a, is_active: nextActive } : a))
+      );
+      return;
+    }
+    setTogglingId(account.id);
+    try {
+      const { error: rpcError } = await supabase.rpc('toggle_receiving_account_status', {
+        p_account_id: account.id,
+        p_is_active: nextActive,
+      });
+
+      if (rpcError) {
+        if (isMissingRpcError(rpcError)) {
+          const { error: updateError } = await supabase
+            .from('receiving_accounts')
+            .update({ is_active: nextActive })
+            .eq('id', account.id);
+          if (updateError) throw updateError;
+        } else {
+          throw rpcError;
+        }
+      }
+      await fetchData();
+    } catch (err: unknown) {
+      setPageError(extractSupabaseErrorMessage(err, 'Failed to update account status.'));
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  const formatAccountDetail = (account: ReceivingAccount): string => {
+    if (account.account_type === 'bank') {
+      if (account.bank_name && account.account_number_mask) {
+        return `${account.bank_name} (${account.account_number_mask})`;
+      }
+      if (account.bank_name) return account.bank_name;
+      if (account.account_number_mask) return `Bank (${account.account_number_mask})`;
+      return 'Bank Account';
+    }
+    return 'Cash Box';
   };
 
   return (
     <div className="space-y-8">
+      {pageError && (
+        <div className="flex items-start gap-2.5 bg-red-500/10 border border-red-500/30 text-red-300 text-xs p-3.5 rounded-xl">
+          <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+          <span className="flex-1">{pageError}</span>
+          <button
+            type="button"
+            onClick={() => setPageError(null)}
+            className="text-red-200 hover:text-white underline text-[11px] cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* 1. DONATION CATEGORIES */}
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -269,10 +605,11 @@ export const CategoriesScreen: React.FC = () => {
                     <td className="py-2.5 px-4 text-right">
                       <button
                         type="button"
+                        disabled={togglingId === c.id}
                         onClick={() => toggleCategoryStatus(c)}
-                        className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer"
+                        className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer disabled:opacity-50"
                       >
-                        {c.is_active ? 'Deactivate' : 'Activate'}
+                        {togglingId === c.id ? 'Updating...' : c.is_active ? 'Deactivate' : 'Activate'}
                       </button>
                     </td>
                   </tr>
@@ -345,10 +682,11 @@ export const CategoriesScreen: React.FC = () => {
                     <td className="py-2.5 px-4 text-right">
                       <button
                         type="button"
+                        disabled={togglingId === c.id}
                         onClick={() => toggleExpenseCategoryStatus(c)}
-                        className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer"
+                        className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer disabled:opacity-50"
                       >
-                        {c.is_active ? 'Deactivate' : 'Activate'}
+                        {togglingId === c.id ? 'Updating...' : c.is_active ? 'Deactivate' : 'Activate'}
                       </button>
                     </td>
                   </tr>
@@ -375,10 +713,7 @@ export const CategoriesScreen: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => {
-              setErrorMsg(null);
-              setIsAccModalOpen(true);
-            }}
+            onClick={openAddAccountModal}
             className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap self-start sm:self-auto"
           >
             <Plus className="w-4 h-4" />
@@ -416,7 +751,7 @@ export const CategoriesScreen: React.FC = () => {
                     <td className="py-2.5 px-4 font-semibold text-white">{a.account_name}</td>
                     <td className="py-2.5 px-4 uppercase font-mono text-slate-400">{a.account_type}</td>
                     <td className="py-2.5 px-4 font-mono text-slate-300">
-                      {a.bank_name ? `${a.bank_name} (${a.account_number_mask || '••••'})` : 'Cash Box'}
+                      {formatAccountDetail(a)}
                     </td>
                     <td className="py-2.5 px-4 text-center font-mono text-[11px] font-semibold">
                       <span className={a.is_active ? 'text-emerald-400' : 'text-slate-500'}>
@@ -424,13 +759,25 @@ export const CategoriesScreen: React.FC = () => {
                       </span>
                     </td>
                     <td className="py-2.5 px-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => toggleAccountStatus(a)}
-                        className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer"
-                      >
-                        {a.is_active ? 'Deactivate' : 'Activate'}
-                      </button>
+                      <div className="inline-flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => openEditAccountModal(a)}
+                          className="text-xs text-slate-300 hover:text-white inline-flex items-center gap-1 cursor-pointer"
+                          title="Edit Account"
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={togglingId === a.id}
+                          onClick={() => toggleAccountStatus(a)}
+                          className="text-xs text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer disabled:opacity-50"
+                        >
+                          {togglingId === a.id ? 'Updating...' : a.is_active ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -476,7 +823,7 @@ export const CategoriesScreen: React.FC = () => {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-lg cursor-pointer"
+                className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-lg cursor-pointer disabled:opacity-50"
               >
                 {isSubmitting ? 'Saving...' : 'Add Category'}
               </button>
@@ -524,7 +871,7 @@ export const CategoriesScreen: React.FC = () => {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-lg cursor-pointer"
+                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-lg cursor-pointer disabled:opacity-50"
               >
                 {isSubmitting ? 'Saving...' : 'Add Expense Category'}
               </button>
@@ -533,26 +880,34 @@ export const CategoriesScreen: React.FC = () => {
         </Modal>
       )}
 
-      {/* CREATE ACCOUNT MODAL */}
+      {/* CREATE / EDIT ACCOUNT MODAL */}
       {isAccModalOpen && (
         <Modal
           isOpen={isAccModalOpen}
-          onClose={() => setIsAccModalOpen(false)}
-          title="Add Cash / Bank Account"
+          onClose={() => {
+            setIsAccModalOpen(false);
+            setEditingAccount(null);
+          }}
+          title={editingAccount ? 'Edit Cash / Bank Account' : 'Add Cash / Bank Account'}
           maxWidth="sm"
         >
-          <form onSubmit={handleCreateAccount} className="space-y-4 text-xs">
+          <form onSubmit={handleSaveAccount} className="space-y-4 text-xs">
             {errorMsg && (
-              <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl">
+              <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl leading-relaxed">
                 {errorMsg}
               </div>
             )}
             <div>
-              <label className="block text-slate-300 font-medium mb-1">Account Name</label>
+              <label className="block text-slate-300 font-medium mb-1">
+                Account Name <span className="text-red-400">*</span>
+              </label>
               <input
                 type="text"
                 value={accName}
-                onChange={(e) => setAccName(e.target.value)}
+                onChange={(e) => {
+                  setAccName(e.target.value);
+                  if (errorMsg) setErrorMsg(null);
+                }}
                 required
                 placeholder="e.g. SBI Main Account or Cash Box"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white focus:outline-none focus:border-sky-500"
@@ -596,7 +951,10 @@ export const CategoriesScreen: React.FC = () => {
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
               <button
                 type="button"
-                onClick={() => setIsAccModalOpen(false)}
+                onClick={() => {
+                  setIsAccModalOpen(false);
+                  setEditingAccount(null);
+                }}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg cursor-pointer"
               >
                 Cancel
@@ -604,9 +962,9 @@ export const CategoriesScreen: React.FC = () => {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg cursor-pointer"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg cursor-pointer disabled:opacity-50"
               >
-                {isSubmitting ? 'Saving...' : 'Add Account'}
+                {isSubmitting ? 'Saving...' : editingAccount ? 'Save Changes' : 'Add Account'}
               </button>
             </div>
           </form>
@@ -615,4 +973,3 @@ export const CategoriesScreen: React.FC = () => {
     </div>
   );
 };
-

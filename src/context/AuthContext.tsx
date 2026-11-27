@@ -582,139 +582,206 @@ export const AuthProvider: React.FC<{
       return;
     }
 
-    // A. Check for OAuth callback token in the URL hash fragment
-    const oauthData = parseOAuthCallback();
-    if (oauthData) {
-      const payload = oauthData.payload;
-      const oauthUser: User = {
-        id: payload.sub,
-        app_metadata: payload.app_metadata || { provider: 'google', providers: ['google'] },
-        user_metadata: payload.user_metadata || {},
-        aud: payload.aud || 'authenticated',
-        confirmation_sent_at: '',
-        recovery_sent_at: '',
-        email_change_sent_at: '',
-        new_email: '',
-        invited_at: '',
-        action_link: '',
-        email: payload.email || '',
-        phone: payload.phone || '',
-        created_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
-        confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
-        email_confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
-        phone_confirmed_at: '',
-        last_sign_in_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
-        role: payload.role || 'authenticated',
-        updated_at: new Date().toISOString(),
-        identities: [],
-        factors: [],
-      };
+    let isMounted = true;
+    let authSubscription: { unsubscribe: () => void } | null = null;
 
-      const oauthSession: Session = {
-        access_token: oauthData.accessToken,
-        refresh_token: oauthData.refreshToken || '',
-        expires_in: oauthData.expiresIn || 3600,
-        expires_at: payload.exp || Math.floor(Date.now() / 1000) + 3600,
-        token_type: 'bearer',
-        user: oauthUser,
-      };
-
-      // Clean the fragment hash from the browser address bar immediately
+    const persistOAuthStorage = (nextUser: User, nextSession: Session | null) => {
       try {
-        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        localStorage.setItem('cms_oauth_user', JSON.stringify(nextUser));
+        if (nextSession) {
+          localStorage.setItem('cms_oauth_session', JSON.stringify(nextSession));
+        }
       } catch {
         // ignore
       }
+    };
 
-      // Store in localStorage for session durability across reloads
+    const clearOAuthStorage = () => {
       try {
-        localStorage.setItem('cms_oauth_user', JSON.stringify(oauthUser));
-        localStorage.setItem('cms_oauth_session', JSON.stringify(oauthSession));
+        localStorage.removeItem('cms_oauth_user');
+        localStorage.removeItem('cms_oauth_session');
       } catch {
         // ignore
       }
+    };
 
-      // Sync session into Supabase client
-      if (supabase && oauthData.accessToken) {
-        supabase.auth
-          .setSession({
-            access_token: oauthData.accessToken,
-            refresh_token: oauthData.refreshToken || '',
-          })
-          .catch((err) => {
+    const syncSupabaseAndFetch = async () => {
+      // A. Check for OAuth callback token in the URL hash fragment
+      const oauthData = parseOAuthCallback();
+      if (oauthData) {
+        const payload = oauthData.payload;
+        const oauthUser: User = {
+          id: payload.sub,
+          app_metadata: payload.app_metadata || { provider: 'google', providers: ['google'] },
+          user_metadata: payload.user_metadata || {},
+          aud: payload.aud || 'authenticated',
+          confirmation_sent_at: '',
+          recovery_sent_at: '',
+          email_change_sent_at: '',
+          new_email: '',
+          invited_at: '',
+          action_link: '',
+          email: payload.email || '',
+          phone: payload.phone || '',
+          created_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+          confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+          email_confirmed_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+          phone_confirmed_at: '',
+          last_sign_in_at: payload.iat ? new Date(payload.iat * 1000).toISOString() : new Date().toISOString(),
+          role: payload.role || 'authenticated',
+          updated_at: new Date().toISOString(),
+          identities: [],
+          factors: [],
+        };
+
+        const oauthSession: Session = {
+          access_token: oauthData.accessToken,
+          refresh_token: oauthData.refreshToken || '',
+          expires_in: oauthData.expiresIn || 3600,
+          expires_at: payload.exp || Math.floor(Date.now() / 1000) + 3600,
+          token_type: 'bearer',
+          user: oauthUser,
+        };
+
+        try {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        } catch {
+          // ignore
+        }
+
+        persistOAuthStorage(oauthUser, oauthSession);
+
+        if (supabase && oauthData.accessToken && oauthData.refreshToken) {
+          try {
+            const { data } = await supabase.auth.setSession({
+              access_token: oauthData.accessToken,
+              refresh_token: oauthData.refreshToken,
+            });
+            if (data?.session) {
+              persistOAuthStorage(data.session.user, data.session);
+            }
+          } catch (err) {
             console.warn('Supabase setSession notice:', err);
-          });
-      }
+          }
+        }
 
-      if (oauthData.providerToken) {
-        setGoogleProviderToken(oauthData.providerToken);
-      }
-      setUser(oauthUser);
-      setSession(oauthSession);
-      fetchUserData(oauthUser);
-      return;
-    }
-
-    // B. Check for stored OAuth user from previous session
-    try {
-      const savedUserStr = localStorage.getItem('cms_oauth_user');
-      const savedSessionStr = localStorage.getItem('cms_oauth_session');
-      if (savedUserStr) {
-        const savedUser = JSON.parse(savedUserStr) as User;
-        const savedSession = savedSessionStr ? (JSON.parse(savedSessionStr) as Session) : null;
-        setUser(savedUser);
-        setSession(savedSession);
-        fetchUserData(savedUser);
+        if (!isMounted) return;
+        if (oauthData.providerToken) {
+          setGoogleProviderToken(oauthData.providerToken);
+        }
+        setUser(oauthUser);
+        setSession(oauthSession);
+        await fetchUserData(oauthUser);
         return;
       }
-    } catch {
-      localStorage.removeItem('cms_oauth_user');
-      localStorage.removeItem('cms_oauth_session');
-    }
 
-    // C. Standard Supabase session check
-    if (!supabaseConfig.isConfigured || !supabase) {
-      setIsLoading(false);
-      return;
-    }
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.provider_token) {
-        setGoogleProviderToken(session.provider_token);
+      // B. Restore from stored OAuth session or standard Supabase session
+      let savedUser: User | null = null;
+      let savedSession: Session | null = null;
+      try {
+        const savedUserStr = localStorage.getItem('cms_oauth_user');
+        const savedSessionStr = localStorage.getItem('cms_oauth_session');
+        if (savedUserStr) {
+          savedUser = JSON.parse(savedUserStr) as User;
+          savedSession = savedSessionStr ? (JSON.parse(savedSessionStr) as Session) : null;
+        }
+      } catch {
+        clearOAuthStorage();
       }
-      if (session?.user) {
-        fetchUserData(session.user);
+
+      if (!supabaseConfig.isConfigured || !supabase) {
+        if (savedUser) {
+          setUser(savedUser);
+          setSession(savedSession);
+          await fetchUserData(savedUser);
+        } else {
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      const {
+        data: { session: existingSession },
+      } = await supabase.auth.getSession();
+
+      if (!isMounted) return;
+
+      if (existingSession?.user) {
+        persistOAuthStorage(existingSession.user, existingSession);
+        setSession(existingSession);
+        setUser(existingSession.user);
+        if (existingSession.provider_token) {
+          setGoogleProviderToken(existingSession.provider_token);
+        }
+        await fetchUserData(existingSession.user);
+      } else if (savedUser) {
+        if (savedSession?.access_token && savedSession?.refresh_token) {
+          try {
+            const { data } = await supabase.auth.setSession({
+              access_token: savedSession.access_token,
+              refresh_token: savedSession.refresh_token,
+            });
+            if (data?.session?.user) {
+              persistOAuthStorage(data.session.user, data.session);
+              if (!isMounted) return;
+              setSession(data.session);
+              setUser(data.session.user);
+              await fetchUserData(data.session.user);
+              return;
+            }
+          } catch (err) {
+            console.warn('Stored OAuth session refresh notice:', err);
+          }
+        }
+
+        if (!isMounted) return;
+        setUser(savedUser);
+        setSession(savedSession);
+        await fetchUserData(savedUser);
       } else {
         setIsLoading(false);
       }
-    });
+    };
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.provider_token) {
-        setGoogleProviderToken(session.provider_token);
-      }
-      if (session?.user) {
-        fetchUserData(session.user);
-      } else {
-        setGoogleProviderToken(null);
-        setProfile(null);
-        setIsPlatformAdmin(false);
-        setChurchAccessList([]);
-        setAuthorizedChurches([]);
-        setActiveChurch(null);
-        setUserRequests([]);
-        setIsLoading(false);
-      }
-    });
+    void syncSupabaseAndFetch();
+
+    if (supabaseConfig.isConfigured && supabase) {
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((event, nextSession) => {
+        if (!isMounted) return;
+        if (event === 'SIGNED_OUT') {
+          clearOAuthStorage();
+          setGoogleProviderToken(null);
+          setProfile(null);
+          setIsPlatformAdmin(false);
+          setChurchAccessList([]);
+          setAuthorizedChurches([]);
+          setActiveChurch(null);
+          setUserRequests([]);
+          setSession(null);
+          setUser(null);
+          setIsLoading(false);
+          return;
+        }
+        if (nextSession?.user) {
+          persistOAuthStorage(nextSession.user, nextSession);
+          setSession(nextSession);
+          setUser(nextSession.user);
+          if (nextSession.provider_token) {
+            setGoogleProviderToken(nextSession.provider_token);
+          }
+          if (event === 'SIGNED_IN') {
+            void fetchUserData(nextSession.user);
+          }
+        }
+      });
+      authSubscription = subscription;
+    }
 
     return () => {
-      subscription.unsubscribe();
+      isMounted = false;
+      authSubscription?.unsubscribe();
     };
   }, []);
 
@@ -890,23 +957,27 @@ export const AuthProvider: React.FC<{
       // ignore
     }
 
-    if (supabase && oauthData.accessToken) {
-      supabase.auth
-        .setSession({
-          access_token: oauthData.accessToken,
-          refresh_token: oauthData.refreshToken || '',
-        })
-        .catch((err) => {
-          console.warn('Supabase setSession notice:', err);
-        });
-    }
-
     if (oauthData.providerToken) {
       setGoogleProviderToken(oauthData.providerToken);
     }
     setUser(oauthUser);
     setSession(oauthSession);
-    fetchUserData(oauthUser);
+
+    if (supabase && oauthData.accessToken && oauthData.refreshToken) {
+      void supabase.auth
+        .setSession({
+          access_token: oauthData.accessToken,
+          refresh_token: oauthData.refreshToken,
+        })
+        .catch((err) => {
+          console.warn('Supabase setSession notice:', err);
+        })
+        .finally(() => {
+          void fetchUserData(oauthUser);
+        });
+    } else {
+      void fetchUserData(oauthUser);
+    }
     return true;
   };
 

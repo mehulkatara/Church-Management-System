@@ -253,6 +253,10 @@ CREATE TABLE IF NOT EXISTS public.receiving_accounts (
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+CREATE INDEX IF NOT EXISTS idx_receiving_accounts_church
+    ON public.receiving_accounts(church_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_receiving_accounts_church_name
+    ON public.receiving_accounts (church_id, lower(trim(account_name)));
 
 -- 10. DONATIONS
 CREATE TABLE IF NOT EXISTS public.donations (
@@ -995,6 +999,10 @@ CREATE POLICY "Church admins and accountants can update receiving accounts"
         public.is_platform_admin(auth.uid())
         OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
     );
+
+GRANT SELECT, INSERT, UPDATE ON public.donation_categories TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.receiving_accounts TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.expense_categories TO authenticated;
 
 -- 10. DONATIONS RLS (Reads only; writes strictly via SECURITY DEFINER RPCs)
 DROP POLICY IF EXISTS "Staff can view church donations; members can view only their own" ON public.donations;
@@ -4069,6 +4077,284 @@ GRANT EXECUTE ON FUNCTION public.correct_expense(UUID, DATE, UUID, UUID, NUMERIC
 
 REVOKE ALL ON FUNCTION public.cancel_expense(UUID, TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.cancel_expense(UUID, TEXT) TO authenticated;
+
+-- 25. CREATE RECEIVING ACCOUNT RPC (Admin or Accountant only; logs audit trail)
+CREATE OR REPLACE FUNCTION public.create_receiving_account(
+    p_church_id UUID,
+    p_account_name TEXT,
+    p_account_type TEXT,
+    p_bank_name TEXT DEFAULT NULL,
+    p_account_number_mask TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_role TEXT;
+    v_clean_name TEXT;
+    v_clean_type TEXT;
+    v_clean_bank TEXT;
+    v_clean_mask TEXT;
+    v_new_account RECORD;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(p_church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Only Admins and Accountants can add Cash & Bank Accounts.';
+    END IF;
+
+    v_clean_name := trim(COALESCE(p_account_name, ''));
+    IF length(v_clean_name) = 0 THEN
+        RAISE EXCEPTION 'Account name is required.';
+    END IF;
+
+    v_clean_type := lower(trim(COALESCE(p_account_type, '')));
+    IF v_clean_type NOT IN ('cash', 'bank') THEN
+        RAISE EXCEPTION 'Account type must be cash or bank.';
+    END IF;
+
+    IF v_clean_type = 'bank' THEN
+        v_clean_bank := NULLIF(trim(COALESCE(p_bank_name, '')), '');
+        v_clean_mask := NULLIF(trim(COALESCE(p_account_number_mask, '')), '');
+    ELSE
+        v_clean_bank := NULL;
+        v_clean_mask := NULL;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM public.receiving_accounts
+        WHERE church_id = p_church_id
+          AND lower(trim(account_name)) = lower(v_clean_name)
+    ) THEN
+        RAISE EXCEPTION 'An account named "%" already exists for this church.', v_clean_name;
+    END IF;
+
+    INSERT INTO public.receiving_accounts (
+        church_id,
+        account_name,
+        account_type,
+        bank_name,
+        account_number_mask,
+        is_active
+    ) VALUES (
+        p_church_id,
+        v_clean_name,
+        v_clean_type,
+        v_clean_bank,
+        v_clean_mask,
+        true
+    )
+    RETURNING * INTO v_new_account;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state
+    ) VALUES (
+        p_church_id,
+        v_actor_id,
+        'receiving_account.created',
+        'receiving_account',
+        v_new_account.id::text,
+        'Added ' || v_clean_type || ' account "' || v_clean_name || '"',
+        NULL,
+        to_jsonb(v_new_account)
+    );
+
+    RETURN to_jsonb(v_new_account);
+END;
+$$;
+
+-- 26. UPDATE RECEIVING ACCOUNT RPC (Admin or Accountant only; logs audit trail)
+CREATE OR REPLACE FUNCTION public.update_receiving_account(
+    p_account_id UUID,
+    p_account_name TEXT,
+    p_account_type TEXT,
+    p_bank_name TEXT DEFAULT NULL,
+    p_account_number_mask TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_old_account RECORD;
+    v_new_account RECORD;
+    v_role TEXT;
+    v_clean_name TEXT;
+    v_clean_type TEXT;
+    v_clean_bank TEXT;
+    v_clean_mask TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    SELECT * INTO v_old_account FROM public.receiving_accounts WHERE id = p_account_id;
+    IF v_old_account.id IS NULL THEN
+        RAISE EXCEPTION 'Receiving account not found.';
+    END IF;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(v_old_account.church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Only Admins and Accountants can update Cash & Bank Accounts.';
+    END IF;
+
+    v_clean_name := trim(COALESCE(p_account_name, ''));
+    IF length(v_clean_name) = 0 THEN
+        RAISE EXCEPTION 'Account name is required.';
+    END IF;
+
+    v_clean_type := lower(trim(COALESCE(p_account_type, '')));
+    IF v_clean_type NOT IN ('cash', 'bank') THEN
+        RAISE EXCEPTION 'Account type must be cash or bank.';
+    END IF;
+
+    IF v_clean_type = 'bank' THEN
+        v_clean_bank := NULLIF(trim(COALESCE(p_bank_name, '')), '');
+        v_clean_mask := NULLIF(trim(COALESCE(p_account_number_mask, '')), '');
+    ELSE
+        v_clean_bank := NULL;
+        v_clean_mask := NULL;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM public.receiving_accounts
+        WHERE church_id = v_old_account.church_id
+          AND id <> p_account_id
+          AND lower(trim(account_name)) = lower(v_clean_name)
+    ) THEN
+        RAISE EXCEPTION 'An account named "%" already exists for this church.', v_clean_name;
+    END IF;
+
+    UPDATE public.receiving_accounts
+    SET
+        account_name = v_clean_name,
+        account_type = v_clean_type,
+        bank_name = v_clean_bank,
+        account_number_mask = v_clean_mask
+    WHERE id = p_account_id
+    RETURNING * INTO v_new_account;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state
+    ) VALUES (
+        v_old_account.church_id,
+        v_actor_id,
+        'receiving_account.updated',
+        'receiving_account',
+        p_account_id::text,
+        'Updated account "' || v_clean_name || '"',
+        to_jsonb(v_old_account),
+        to_jsonb(v_new_account)
+    );
+
+    RETURN to_jsonb(v_new_account);
+END;
+$$;
+
+-- 27. TOGGLE RECEIVING ACCOUNT STATUS RPC (Admin or Accountant only)
+CREATE OR REPLACE FUNCTION public.toggle_receiving_account_status(
+    p_account_id UUID,
+    p_is_active BOOLEAN
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_actor_id UUID := auth.uid();
+    v_old_account RECORD;
+    v_new_account RECORD;
+    v_role TEXT;
+BEGIN
+    IF v_actor_id IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    SELECT * INTO v_old_account FROM public.receiving_accounts WHERE id = p_account_id;
+    IF v_old_account.id IS NULL THEN
+        RAISE EXCEPTION 'Receiving account not found.';
+    END IF;
+
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(v_old_account.church_id, v_actor_id);
+    END IF;
+
+    IF v_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Only Admins and Accountants can change account status.';
+    END IF;
+
+    UPDATE public.receiving_accounts
+    SET is_active = COALESCE(p_is_active, NOT v_old_account.is_active)
+    WHERE id = p_account_id
+    RETURNING * INTO v_new_account;
+
+    INSERT INTO public.audit_logs (
+        church_id,
+        actor_user_id,
+        action,
+        entity_type,
+        entity_id,
+        change_summary,
+        previous_state,
+        new_state
+    ) VALUES (
+        v_old_account.church_id,
+        v_actor_id,
+        'receiving_account.status_changed',
+        'receiving_account',
+        p_account_id::text,
+        CASE WHEN v_new_account.is_active THEN 'Activated' ELSE 'Deactivated' END || ' account "' || v_new_account.account_name || '"',
+        to_jsonb(v_old_account),
+        to_jsonb(v_new_account)
+    );
+
+    RETURN to_jsonb(v_new_account);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.create_receiving_account(UUID, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.create_receiving_account(UUID, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.update_receiving_account(UUID, TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.update_receiving_account(UUID, TEXT, TEXT, TEXT, TEXT) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.toggle_receiving_account_status(UUID, BOOLEAN) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.toggle_receiving_account_status(UUID, BOOLEAN) TO authenticated;
 
 -- ==============================================================================
 -- SECTION 7: BACKFILL PROFILES FOR EXISTING AUTH USERS (IF ANY REMAIN)

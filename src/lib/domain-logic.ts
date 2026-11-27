@@ -1905,3 +1905,157 @@ export function buildMonthlyCashFlowTrend(
     };
   });
 }
+
+export interface ValidateReceivingAccountParams {
+  accountName: string;
+  accountType: 'cash' | 'bank' | string;
+  bankName?: string | null;
+  accountNumberMask?: string | null;
+  existingAccounts?: Array<{ id: string; account_name: string }>;
+  editingAccountId?: string | null;
+}
+
+export interface ValidateReceivingAccountResult {
+  valid: boolean;
+  error?: string;
+  normalized: {
+    account_name: string;
+    account_type: 'cash' | 'bank';
+    bank_name: string | null;
+    account_number_mask: string | null;
+  };
+}
+
+/**
+ * Validates and normalizes Cash & Bank Account inputs before persisting.
+ */
+export function validateReceivingAccountInput(
+  params: ValidateReceivingAccountParams
+): ValidateReceivingAccountResult {
+  const cleanName = (params.accountName || '').trim();
+  const cleanType = params.accountType === 'bank' ? 'bank' : params.accountType === 'cash' ? 'cash' : '';
+  const cleanBank = cleanType === 'bank' ? (params.bankName || '').trim() || null : null;
+  const cleanMask = cleanType === 'bank' ? (params.accountNumberMask || '').trim() || null : null;
+
+  if (!cleanName) {
+    return {
+      valid: false,
+      error: 'Account name is required.',
+      normalized: {
+        account_name: '',
+        account_type: cleanType === 'bank' ? 'bank' : 'cash',
+        bank_name: cleanBank,
+        account_number_mask: cleanMask,
+      },
+    };
+  }
+
+  if (cleanName.length > 120) {
+    return {
+      valid: false,
+      error: 'Account name cannot exceed 120 characters.',
+      normalized: {
+        account_name: cleanName,
+        account_type: cleanType === 'bank' ? 'bank' : 'cash',
+        bank_name: cleanBank,
+        account_number_mask: cleanMask,
+      },
+    };
+  }
+
+  if (!cleanType) {
+    return {
+      valid: false,
+      error: 'Account type must be either Cash Box or Bank Account.',
+      normalized: {
+        account_name: cleanName,
+        account_type: 'cash',
+        bank_name: null,
+        account_number_mask: null,
+      },
+    };
+  }
+
+  const lowerName = cleanName.toLowerCase();
+  const duplicate = (params.existingAccounts || []).find(
+    (acc) =>
+      acc.id !== params.editingAccountId &&
+      (acc.account_name || '').trim().toLowerCase() === lowerName
+  );
+  if (duplicate) {
+    return {
+      valid: false,
+      error: `An account named "${cleanName}" already exists for this church.`,
+      normalized: {
+        account_name: cleanName,
+        account_type: cleanType,
+        bank_name: cleanBank,
+        account_number_mask: cleanMask,
+      },
+    };
+  }
+
+  return {
+    valid: true,
+    normalized: {
+      account_name: cleanName,
+      account_type: cleanType,
+      bank_name: cleanBank,
+      account_number_mask: cleanMask,
+    },
+  };
+}
+
+/**
+ * Extracts readable error messages from Supabase PostgrestError plain objects as well as Error instances.
+ */
+export function extractSupabaseErrorMessage(err: unknown, fallback: string): string {
+  let rawMessage = '';
+  let code = '';
+  let details = '';
+  let hint = '';
+
+  if (err instanceof Error) {
+    rawMessage = err.message;
+  } else if (err && typeof err === 'object') {
+    const obj = err as Record<string, unknown>;
+    if (typeof obj.message === 'string') rawMessage = obj.message;
+    if (typeof obj.code === 'string') code = obj.code;
+    if (typeof obj.details === 'string') details = obj.details;
+    if (typeof obj.hint === 'string') hint = obj.hint;
+  } else if (typeof err === 'string') {
+    rawMessage = err;
+  }
+
+  const combined = `${code} ${rawMessage} ${details}`.toLowerCase();
+
+  if (
+    code === '42501' ||
+    combined.includes('row-level security') ||
+    combined.includes('permission denied')
+  ) {
+    return 'Permission denied by database security policy. Ensure you are signed in with an active Admin or Accountant session for this church.';
+  }
+
+  if (code === '23505' || combined.includes('duplicate key') || combined.includes('already exists')) {
+    return rawMessage || 'A record with this name already exists for this church.';
+  }
+
+  if (
+    combined.includes('jwt expired') ||
+    combined.includes('invalid jwt') ||
+    combined.includes('invalid api key')
+  ) {
+    return 'Your sign-in session has expired or Supabase API credentials are missing. Please sign out and sign back in with Google.';
+  }
+
+  if (rawMessage) {
+    if (hint && !rawMessage.includes(hint)) {
+      return `${rawMessage} (${hint})`;
+    }
+    return rawMessage;
+  }
+
+  return fallback;
+}
+

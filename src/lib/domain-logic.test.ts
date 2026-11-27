@@ -27,6 +27,8 @@ import {
   getHighestChurchRole,
   getAssignableStaffRoles,
   canManageStaffAssignmentStatus,
+  validateReceivingAccountInput,
+  extractSupabaseErrorMessage,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -939,4 +941,75 @@ test('Expense analytics and net cash-flow helpers exclude cancelled entries and 
   assert.equal(cashFlow[7].isCurrentMonth, true);
 });
 
+test('Receiving account validation normalizes cash/bank fields and detects duplicate names', () => {
+  const existing = [
+    { id: 'acc-1', account_name: 'Church General Cash' },
+    { id: 'acc-2', account_name: 'SBI Main Account' },
+  ];
 
+  // Blank / whitespace-only rejected
+  const blankRes = validateReceivingAccountInput({
+    accountName: '   ',
+    accountType: 'cash',
+    existingAccounts: existing,
+  });
+  assert.equal(blankRes.valid, false);
+
+  // Case-insensitive duplicate rejected on create
+  const dupRes = validateReceivingAccountInput({
+    accountName: '  sbi main account ',
+    accountType: 'bank',
+    existingAccounts: existing,
+  });
+  assert.equal(dupRes.valid, false);
+  assert.match(dupRes.error || '', /already exists/i);
+
+  // Editing same account allows keeping its own name
+  const editSame = validateReceivingAccountInput({
+    accountName: 'SBI Main Account',
+    accountType: 'bank',
+    bankName: 'State Bank of India',
+    accountNumberMask: '   ',
+    existingAccounts: existing,
+    editingAccountId: 'acc-2',
+  });
+  assert.equal(editSame.valid, true);
+  assert.equal(editSame.normalized.bank_name, 'State Bank of India');
+  assert.equal(editSame.normalized.account_number_mask, null);
+
+  // Switching to cash clears bank fields cleanly
+  const cashSwitch = validateReceivingAccountInput({
+    accountName: 'Offering Box 2',
+    accountType: 'cash',
+    bankName: 'Should Clear',
+    accountNumberMask: '1234',
+    existingAccounts: existing,
+  });
+  assert.equal(cashSwitch.valid, true);
+  assert.equal(cashSwitch.normalized.bank_name, null);
+  assert.equal(cashSwitch.normalized.account_number_mask, null);
+});
+
+test('Supabase error extractor formats PostgrestError plain objects and RLS/JWT codes cleanly', () => {
+  const rlsErr = {
+    code: '42501',
+    message: 'new row violates row-level security policy for table "receiving_accounts"',
+  };
+  assert.match(
+    extractSupabaseErrorMessage(rlsErr, 'Fallback'),
+    /Permission denied by database security policy/i
+  );
+
+  const customPgErr = {
+    code: 'P0001',
+    message: 'Account name is required.',
+    hint: 'Provide a non-empty name',
+  };
+  assert.equal(
+    extractSupabaseErrorMessage(customPgErr, 'Fallback'),
+    'Account name is required. (Provide a non-empty name)'
+  );
+
+  assert.equal(extractSupabaseErrorMessage(new Error('Network down'), 'Fallback'), 'Network down');
+  assert.equal(extractSupabaseErrorMessage(null, 'Fallback message'), 'Fallback message');
+});
