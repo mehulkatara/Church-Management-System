@@ -280,7 +280,7 @@ CREATE TABLE IF NOT EXISTS public.donations (
 CREATE INDEX IF NOT EXISTS idx_donations_church_date ON public.donations(church_id, donation_date);
 CREATE INDEX IF NOT EXISTS idx_donations_member ON public.donations(member_id);
 CREATE INDEX IF NOT EXISTS idx_donations_active ON public.donations(church_id) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_donations_active_receipt
+CREATE INDEX IF NOT EXISTS idx_donations_church_receipt
     ON public.donations (church_id, lower(trim(receipt_number)))
     WHERE deleted_at IS NULL;
 
@@ -1234,7 +1234,8 @@ DECLARE
     v_church_code TEXT;
     v_canonical TEXT;
     v_normalized TEXT;
-    v_conflict BOOLEAN;
+    v_existing_count INT := 0;
+    v_existing_total NUMERIC(14, 2) := 0;
 BEGIN
     IF v_actor_id IS NULL THEN
         RAISE EXCEPTION 'Authentication required.';
@@ -1247,7 +1248,7 @@ BEGIN
     END IF;
 
     IF v_role NOT IN ('admin', 'accountant', 'collector') THEN
-        RAISE EXCEPTION 'Unauthorized: Only church staff can verify receipt availability.';
+        RAISE EXCEPTION 'Unauthorized: You do not have permission to verify receipt availability.';
     END IF;
 
     SELECT code INTO v_church_code
@@ -1261,20 +1262,24 @@ BEGIN
     v_canonical := public.normalize_auto_receipt_number(v_church_code, p_donation_date, p_receipt_number);
     v_normalized := lower(trim(v_canonical));
 
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.donations d
-        WHERE d.church_id = p_church_id
-          AND d.deleted_at IS NULL
-          AND lower(trim(d.receipt_number)) = v_normalized
-          AND (
-              p_exclude_donation_id IS NULL
-              OR d.id <> p_exclude_donation_id
-          )
-    ) INTO v_conflict;
+    SELECT
+        COUNT(*)::INT,
+        COALESCE(SUM(d.amount), 0)::NUMERIC(14, 2)
+    INTO v_existing_count, v_existing_total
+    FROM public.donations d
+    WHERE d.church_id = p_church_id
+      AND d.deleted_at IS NULL
+      AND lower(trim(d.receipt_number)) = v_normalized
+      AND (
+          p_exclude_donation_id IS NULL
+          OR d.id <> p_exclude_donation_id
+      );
 
     RETURN jsonb_build_object(
-        'available', NOT v_conflict,
+        'available', true,
+        'is_shared', v_existing_count > 0,
+        'existing_count', v_existing_count,
+        'existing_total', v_existing_total,
         'formatted_receipt', v_canonical
     );
 END;
@@ -1283,7 +1288,7 @@ $$;
 REVOKE ALL ON FUNCTION public.check_receipt_number_availability(UUID, DATE, TEXT, UUID) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.check_receipt_number_availability(UUID, DATE, TEXT, UUID) TO authenticated;
 
--- 1. RECORD DONATION (Atomic transaction with auto church-code + FY prefix & active receipt uniqueness)
+-- 1. RECORD DONATION (Atomic transaction with auto church-code + FY prefix; shared receipt numbers permitted)
 CREATE OR REPLACE FUNCTION public.record_donation(
     p_church_id UUID,
     p_member_id UUID,
@@ -1306,7 +1311,6 @@ DECLARE
     v_actor_id UUID := auth.uid();
     v_role TEXT;
     v_canonical_receipt TEXT;
-    v_normalized_receipt TEXT;
     v_existing_donation_id UUID;
     v_donation_id UUID;
     v_new_donation RECORD;
@@ -1358,7 +1362,6 @@ BEGIN
     END IF;
 
     v_canonical_receipt := public.normalize_auto_receipt_number(v_church_code, p_donation_date, p_receipt_number);
-    v_normalized_receipt := lower(trim(v_canonical_receipt));
 
     SELECT church_id, full_name INTO v_member_church_id, v_member_name
     FROM public.members WHERE id = p_member_id;
@@ -1387,53 +1390,36 @@ BEGIN
         RAISE EXCEPTION 'Selected receiving account is inactive.';
     END IF;
 
-    IF EXISTS (
-        SELECT 1 FROM public.donations d
-        WHERE d.church_id = p_church_id
-          AND d.deleted_at IS NULL
-          AND lower(trim(d.receipt_number)) = v_normalized_receipt
-    ) THEN
-        RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_canonical_receipt;
-    END IF;
-
-    BEGIN
-        INSERT INTO public.donations (
-            church_id,
-            member_id,
-            receipt_number,
-            donation_date,
-            category_id,
-            amount,
-            receiving_account_id,
-            payment_method,
-            payment_reference,
-            notes,
-            idempotency_key,
-            created_by,
-            updated_by
-        ) VALUES (
-            p_church_id,
-            p_member_id,
-            v_canonical_receipt,
-            p_donation_date,
-            p_category_id,
-            p_amount,
-            p_receiving_account_id,
-            p_payment_method,
-            trim(p_payment_reference),
-            trim(p_notes),
-            p_idempotency_key,
-            v_actor_id,
-            v_actor_id
-        )
-        RETURNING id INTO v_donation_id;
-    EXCEPTION
-        WHEN unique_violation THEN
-            IF SQLERRM ILIKE '%uq_donations_active_receipt%' THEN
-                RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_canonical_receipt;
-            END IF;
-            RAISE;
-    END;
+    INSERT INTO public.donations (
+        church_id,
+        member_id,
+        receipt_number,
+        donation_date,
+        category_id,
+        amount,
+        receiving_account_id,
+        payment_method,
+        payment_reference,
+        notes,
+        idempotency_key,
+        created_by,
+        updated_by
+    ) VALUES (
+        p_church_id,
+        p_member_id,
+        v_canonical_receipt,
+        p_donation_date,
+        p_category_id,
+        p_amount,
+        p_receiving_account_id,
+        p_payment_method,
+        trim(p_payment_reference),
+        trim(p_notes),
+        NULLIF(trim(COALESCE(p_idempotency_key, '')), ''),
+        v_actor_id,
+        v_actor_id
+    )
+    RETURNING id INTO v_donation_id;
 
     SELECT * INTO v_new_donation FROM public.donations WHERE id = v_donation_id;
 
@@ -1511,9 +1497,7 @@ DECLARE
     v_cat_church_id UUID;
     v_acc_church_id UUID;
     v_next_revision INT;
-    v_old_norm_receipt TEXT;
     v_new_canonical_receipt TEXT;
-    v_new_norm_receipt TEXT;
 BEGIN
     IF v_actor_id IS NULL THEN
         RAISE EXCEPTION 'Authentication required.';
@@ -1565,43 +1549,21 @@ BEGIN
     END IF;
 
     v_new_canonical_receipt := public.normalize_auto_receipt_number(v_church_code, p_new_donation_date, p_new_receipt_number);
-    v_old_norm_receipt := lower(trim(v_old_donation.receipt_number));
-    v_new_norm_receipt := lower(trim(v_new_canonical_receipt));
 
-    IF v_old_norm_receipt <> v_new_norm_receipt THEN
-        IF EXISTS (
-            SELECT 1 FROM public.donations d
-            WHERE d.church_id = v_church_id
-              AND d.deleted_at IS NULL
-              AND d.id <> p_donation_id
-              AND lower(trim(d.receipt_number)) = v_new_norm_receipt
-        ) THEN
-            RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_new_canonical_receipt;
-        END IF;
-    END IF;
-
-    BEGIN
-        UPDATE public.donations
-        SET
-            receipt_number = v_new_canonical_receipt,
-            amount = p_new_amount,
-            category_id = p_new_category_id,
-            receiving_account_id = p_new_receiving_account_id,
-            donation_date = p_new_donation_date,
-            payment_method = p_new_payment_method,
-            payment_reference = trim(p_new_payment_reference),
-            notes = trim(p_new_notes),
-            updated_at = timezone('utc'::text, now()),
-            updated_by = v_actor_id
-        WHERE id = p_donation_id
-        RETURNING * INTO v_new_donation;
-    EXCEPTION
-        WHEN unique_violation THEN
-            IF SQLERRM ILIKE '%uq_donations_active_receipt%' THEN
-                RAISE EXCEPTION 'Receipt number % already exists for this church. Please enter an unused receipt number.', v_new_canonical_receipt;
-            END IF;
-            RAISE;
-    END;
+    UPDATE public.donations
+    SET
+        receipt_number = v_new_canonical_receipt,
+        amount = p_new_amount,
+        category_id = p_new_category_id,
+        receiving_account_id = p_new_receiving_account_id,
+        donation_date = p_new_donation_date,
+        payment_method = p_new_payment_method,
+        payment_reference = trim(p_new_payment_reference),
+        notes = trim(p_new_notes),
+        updated_at = timezone('utc'::text, now()),
+        updated_by = v_actor_id
+    WHERE id = p_donation_id
+    RETURNING * INTO v_new_donation;
 
     SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
     FROM public.donation_revisions WHERE donation_id = p_donation_id;

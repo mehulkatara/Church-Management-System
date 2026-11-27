@@ -23,6 +23,8 @@ import {
   AlertTriangle,
   Loader2,
   Server,
+  Layers,
+  PlusCircle,
 } from 'lucide-react';
 
 interface RecordDonationScreenProps {
@@ -56,11 +58,18 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const [accounts, setAccounts] = useState<ReceivingAccount[]>([]);
   const [isLoadingLookups, setIsLoadingLookups] = useState(true);
 
-  // Live duplicate receipt availability state
-  const [availabilityState, setAvailabilityState] = useState<
-    'idle' | 'checking' | 'available' | 'duplicate'
-  >('idle');
+  // Live receipt status state (non-blocking: shows whether receipt is new or shared)
+  const [receiptLookup, setReceiptLookup] = useState<{
+    state: 'idle' | 'checking' | 'new' | 'shared';
+    existingCount: number;
+    existingTotal: number;
+  }>({ state: 'idle', existingCount: 0, existingTotal: 0 });
   const checkCounterRef = useRef(0);
+  const [submissionIdempotencyKey, setSubmissionIdempotencyKey] = useState(() =>
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
 
   // Submission State
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -68,6 +77,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   const [savedDonation, setSavedDonation] = useState<{
     id: string;
     receiptNumber: string;
+    receiptDigits: string;
     amount: number;
     memberName: string;
     memberPhone: string | null;
@@ -83,14 +93,19 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
 
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
+  const generateIdempotencyKey = () =>
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
   useEffect(() => {
     if (!activeChurch || !receiptBuild.valid || !donationDate) {
-      setAvailabilityState('idle');
+      setReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
       return;
     }
 
     const requestId = ++checkCounterRef.current;
-    setAvailabilityState('checking');
+    setReceiptLookup((prev) => ({ ...prev, state: 'checking' }));
 
     const timer = setTimeout(async () => {
       try {
@@ -101,10 +116,14 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
           receiptDigits: receiptBuild.numericValue,
         });
         if (requestId !== checkCounterRef.current) return;
-        setAvailabilityState(res.available ? 'available' : 'duplicate');
+        setReceiptLookup({
+          state: res.isShared ? 'shared' : 'new',
+          existingCount: res.existingCount,
+          existingTotal: res.existingTotal,
+        });
       } catch {
         if (requestId !== checkCounterRef.current) return;
-        setAvailabilityState('idle');
+        setReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
       }
     }, 220);
 
@@ -114,6 +133,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
   // Fetch church master data
   useEffect(() => {
     setSelectedMember(null);
+    setSubmissionIdempotencyKey(generateIdempotencyKey());
     if (!supabase || !activeChurch) return;
 
     const fetchLookups = async () => {
@@ -171,13 +191,6 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       return;
     }
 
-    if (availabilityState === 'duplicate') {
-      setErrorMessage(
-        `Receipt number ${built.fullReceiptNumber} already exists for this church. Please enter an unused receipt number.`
-      );
-      return;
-    }
-
     if (!selectedMember) {
       setErrorMessage('Please search and select a church member.');
       return;
@@ -202,27 +215,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     setIsSubmitting(true);
 
     try {
-      // Live duplicate check right before RPC write
-      const checkRes = await checkReceiptAvailability({
-        churchId: activeChurch.id,
-        churchCode: activeChurch.code,
-        donationDate,
-        receiptDigits: built.numericValue,
-      });
-
-      if (!checkRes.available) {
-        setAvailabilityState('duplicate');
-        setErrorMessage(
-          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
-        );
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Generate client idempotency key to prevent double clicks
-      const idempotencyKey = `rec-${activeChurch.id}-${built.normalizedKey}-${Date.now()}`;
-
-      // Call atomic record_donation RPC
+      // Call atomic record_donation RPC (shared receipt numbers allowed)
       const { data, error } = await supabase.rpc('record_donation', {
         p_church_id: activeChurch.id,
         p_member_id: selectedMember.id,
@@ -234,22 +227,11 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
         p_payment_method: paymentMethod,
         p_payment_reference: paymentReference.trim() || null,
         p_notes: notes.trim() || null,
-        p_idempotency_key: idempotencyKey,
+        p_idempotency_key: submissionIdempotencyKey,
       });
 
       if (error) {
-        if (
-          error.message.includes('already exists') ||
-          error.message.includes('uq_donations_active_receipt') ||
-          error.message.includes('uq_church_normalized_receipt')
-        ) {
-          setAvailabilityState('duplicate');
-          setErrorMessage(
-            `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
-          );
-        } else {
-          setErrorMessage(error.message);
-        }
+        setErrorMessage(error.message);
         setIsSubmitting(false);
         return;
       }
@@ -260,6 +242,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       const savedInfo = {
         id: data?.id || 'new-donation',
         receiptNumber: data?.receipt_number || built.fullReceiptNumber,
+        receiptDigits: built.numericValue,
         amount: parsedAmount,
         memberName: selectedMember.full_name || 'Member',
         memberPhone: selectedMember.contact_phone || null,
@@ -285,14 +268,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to save donation.';
-      if (msg.includes('already exists') || msg.includes('uq_donations_active_receipt')) {
-        setAvailabilityState('duplicate');
-        setErrorMessage(
-          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
-        );
-      } else {
-        setErrorMessage(msg);
-      }
+      setErrorMessage(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -315,13 +291,28 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
     }
   };
 
+  const handleAddAnotherOnSameReceipt = () => {
+    const keepDigits = savedDonation?.receiptDigits || receiptDigits;
+    setSavedDonation(null);
+    setSmsStatus({ state: 'idle' });
+    setIsRetryingSms(false);
+    setReceiptDigits(keepDigits);
+    setReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
+    setSubmissionIdempotencyKey(generateIdempotencyKey());
+    setAmount('500');
+    setPaymentReference('');
+    setNotes('');
+    setErrorMessage(null);
+  };
+
   const handleResetForNext = () => {
     setSavedDonation(null);
     setSmsStatus({ state: 'idle' });
     setIsRetryingSms(false);
     setSelectedMember(null);
     setReceiptDigits('');
-    setAvailabilityState('idle');
+    setReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
+    setSubmissionIdempotencyKey(generateIdempotencyKey());
     setAmount('500');
     setPaymentReference('');
     setNotes('');
@@ -457,14 +448,23 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
             </div>
           </div>
 
-          {/* Action to Record Another */}
-          <div className="flex items-center gap-3 pt-2">
+          {/* Actions to Record Another */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2">
             <button
+              type="button"
+              onClick={handleAddAnotherOnSameReceipt}
+              className="flex-1 bg-slate-800 hover:bg-slate-700 text-sky-300 font-semibold text-xs py-3 px-4 rounded-xl border border-slate-700 flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <PlusCircle className="w-4 h-4 shrink-0" />
+              <span>Add Another to {savedDonation.receiptNumber}</span>
+            </button>
+            <button
+              type="button"
               onClick={handleResetForNext}
               className="flex-1 bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer"
             >
-              <RotateCcw className="w-4 h-4" />
-              <span>Record Another Donation</span>
+              <RotateCcw className="w-4 h-4 shrink-0" />
+              <span>Record New Receipt</span>
             </button>
           </div>
         </div>
@@ -508,7 +508,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
           </div>
         )}
 
-        {/* 1. RECEIPT NUMBER (Locked Auto Prefix + Numeric Input Only + Live Duplicate Check) */}
+        {/* 1. RECEIPT NUMBER (Locked Auto Prefix + Numeric Input Only + Live Shared-Receipt Indicator) */}
         <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <label htmlFor="receipt-number" className="block text-xs font-semibold text-white">
@@ -519,11 +519,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
             </span>
           </div>
 
-          <div
-            className={`flex items-stretch rounded-xl border bg-slate-900 overflow-hidden focus-within:border-sky-500 ${
-              availabilityState === 'duplicate' ? 'border-red-500' : 'border-slate-700'
-            }`}
-          >
+          <div className="flex items-stretch rounded-xl border border-slate-700 bg-slate-900 overflow-hidden focus-within:border-sky-500">
             <div className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-950 border-r border-slate-700 text-slate-300 font-mono text-sm tabular-nums select-none shrink-0">
               <Receipt className="w-4 h-4 text-slate-500 shrink-0" />
               <span>{lockedPrefix}</span>
@@ -542,27 +538,31 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
             />
           </div>
 
-          {availabilityState === 'checking' && (
+          {receiptLookup.state === 'checking' && (
             <p className="text-[11px] text-slate-400 font-mono">
-              Checking availability for {fullReceiptPreview}...
+              Checking receipt {fullReceiptPreview}...
             </p>
           )}
-          {availabilityState === 'available' && (
+          {receiptLookup.state === 'new' && (
             <p className="text-[11px] text-emerald-400 flex items-center gap-1.5 font-mono tabular-nums">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-              <span>Available: {fullReceiptPreview}</span>
+              <span>New receipt: {fullReceiptPreview}</span>
             </p>
           )}
-          {availabilityState === 'duplicate' && (
-            <p className="text-[11px] text-red-400 flex items-center gap-1.5 font-mono tabular-nums">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-              <span>Duplicate receipt: {fullReceiptPreview} is already in use by an active donation.</span>
+          {receiptLookup.state === 'shared' && (
+            <p className="text-[11px] text-sky-300 flex items-center gap-1.5 font-mono tabular-nums">
+              <Layers className="w-3.5 h-3.5 shrink-0 text-sky-400" />
+              <span>
+                Shared receipt: {fullReceiptPreview} already has {receiptLookup.existingCount}{' '}
+                {receiptLookup.existingCount === 1 ? 'donation' : 'donations'} (
+                {formatINR(receiptLookup.existingTotal)}) &mdash; this entry will be added under the same receipt.
+              </span>
             </p>
           )}
-          {availabilityState === 'idle' && (
+          {receiptLookup.state === 'idle' && (
             <p className="text-[11px] text-slate-500">
-              Enter positive numbers only (leading zeros are removed automatically). Prefix updates
-              from church code and donation date.
+              Enter positive numbers only (leading zeros are removed automatically). Existing receipt
+              numbers can be reused to record multiple donations on the same receipt.
             </p>
           )}
         </div>
@@ -737,7 +737,7 @@ export const RecordDonationScreen: React.FC<RecordDonationScreenProps> = ({ onDo
         <div className="pt-3 border-t border-slate-800">
           <button
             type="submit"
-            disabled={isSubmitting || isLoadingLookups || availabilityState === 'duplicate'}
+            disabled={isSubmitting || isLoadingLookups}
             className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-sky-600/20 text-xs sm:text-sm"
           >
             <Receipt className="w-4 h-4" />

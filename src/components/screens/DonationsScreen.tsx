@@ -27,6 +27,7 @@ import {
   XCircle,
   MessageSquare,
   ArrowRight,
+  Layers,
 } from 'lucide-react';
 
 export const DonationsScreen: React.FC = () => {
@@ -66,9 +67,11 @@ export const DonationsScreen: React.FC = () => {
   const [editReference, setEditReference] = useState('');
   const [editNotes, setEditNotes] = useState('');
   const [editReason, setEditReason] = useState('');
-  const [editAvailability, setEditAvailability] = useState<
-    'idle' | 'checking' | 'available' | 'duplicate'
-  >('idle');
+  const [editReceiptLookup, setEditReceiptLookup] = useState<{
+    state: 'idle' | 'checking' | 'new' | 'shared';
+    existingCount: number;
+    existingTotal: number;
+  }>({ state: 'idle', existingCount: 0, existingTotal: 0 });
   const editCheckCounterRef = React.useRef(0);
 
   const editReceiptBuild = buildFullReceiptNumber(
@@ -160,18 +163,18 @@ export const DonationsScreen: React.FC = () => {
     setEditNotes(donation.notes || '');
     setEditReason('');
     setActionError(null);
-    setEditAvailability('idle');
+    setEditReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
     setIsCorrectModalOpen(true);
   };
 
   useEffect(() => {
     if (!isCorrectModalOpen || !activeChurch || !selectedDonation || !editReceiptBuild.valid || !editDate) {
-      setEditAvailability('idle');
+      setEditReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
       return;
     }
 
     const requestId = ++editCheckCounterRef.current;
-    setEditAvailability('checking');
+    setEditReceiptLookup((prev) => ({ ...prev, state: 'checking' }));
 
     const timer = setTimeout(async () => {
       try {
@@ -183,10 +186,14 @@ export const DonationsScreen: React.FC = () => {
           excludeDonationId: selectedDonation.id,
         });
         if (requestId !== editCheckCounterRef.current) return;
-        setEditAvailability(res.available ? 'available' : 'duplicate');
+        setEditReceiptLookup({
+          state: res.isShared ? 'shared' : 'new',
+          existingCount: res.existingCount,
+          existingTotal: res.existingTotal,
+        });
       } catch {
         if (requestId !== editCheckCounterRef.current) return;
-        setEditAvailability('idle');
+        setEditReceiptLookup({ state: 'idle', existingCount: 0, existingTotal: 0 });
       }
     }, 220);
 
@@ -212,13 +219,6 @@ export const DonationsScreen: React.FC = () => {
       return;
     }
 
-    if (editAvailability === 'duplicate') {
-      setActionError(
-        `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
-      );
-      return;
-    }
-
     if (!editReason || editReason.trim().length < 3) {
       setActionError('A clear audit reason of at least 3 characters is strictly required.');
       return;
@@ -228,24 +228,7 @@ export const DonationsScreen: React.FC = () => {
     setActionError(null);
 
     try {
-      const checkRes = await checkReceiptAvailability({
-        churchId: activeChurch.id,
-        churchCode: activeChurch.code,
-        donationDate: editDate,
-        receiptDigits: built.numericValue,
-        excludeDonationId: selectedDonation.id,
-      });
-
-      if (!checkRes.available) {
-        setEditAvailability('duplicate');
-        setActionError(
-          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
-        );
-        setIsActionLoading(false);
-        return;
-      }
-
-      const { data, error } = await supabase.rpc('correct_donation', {
+      const { error } = await supabase.rpc('correct_donation', {
         p_donation_id: selectedDonation.id,
         p_new_receipt_number: built.numericValue,
         p_new_amount: parseFloat(editAmount),
@@ -270,18 +253,7 @@ export const DonationsScreen: React.FC = () => {
           : err && typeof err === 'object' && 'message' in err
             ? String((err as { message: unknown }).message)
             : 'Correction failed.';
-      if (
-        msg.includes('already exists') ||
-        msg.includes('uq_donations_active_receipt') ||
-        msg.includes('uq_church_normalized_receipt')
-      ) {
-        setEditAvailability('duplicate');
-        setActionError(
-          `Receipt number ${built.fullReceiptNumber} already exists for this church. Duplicate entries are not allowed.`
-        );
-      } else {
-        setActionError(msg);
-      }
+      setActionError(msg);
     } finally {
       setIsActionLoading(false);
     }
@@ -715,8 +687,8 @@ export const DonationsScreen: React.FC = () => {
 
             <div className="p-3 bg-sky-500/10 border border-sky-500/20 text-sky-300 rounded-xl text-[11px] leading-relaxed">
               <strong>Audit Policy:</strong> Correcting a donation creates a permanent revision
-              snapshot. If the receipt number is changed, the old receipt number is freed for reuse
-              while the previous value remains recorded in revision and audit history.
+              snapshot while keeping full change history in revisions and the audit log. Multiple
+              donations may share the same receipt number.
             </div>
 
             <div className="space-y-1.5">
@@ -728,11 +700,7 @@ export const DonationsScreen: React.FC = () => {
                   Prefix locked: {editReceiptBuild.prefix}
                 </span>
               </div>
-              <div
-                className={`flex items-stretch rounded-xl border bg-slate-950 overflow-hidden focus-within:border-sky-500 ${
-                  editAvailability === 'duplicate' ? 'border-red-500' : 'border-slate-700'
-                }`}
-              >
+              <div className="flex items-stretch rounded-xl border border-slate-700 bg-slate-950 overflow-hidden focus-within:border-sky-500">
                 <span className="px-3 py-2 bg-slate-900 border-r border-slate-700 font-mono tabular-nums text-slate-300 select-none shrink-0">
                   {editReceiptBuild.prefix}
                 </span>
@@ -749,21 +717,25 @@ export const DonationsScreen: React.FC = () => {
                   className="flex-1 min-w-0 bg-slate-950 px-3 py-2 font-mono tabular-nums text-sky-300 focus:outline-none"
                 />
               </div>
-              {editAvailability === 'checking' && (
+              {editReceiptLookup.state === 'checking' && (
                 <p className="text-[11px] text-slate-400 font-mono">
-                  Checking availability for {editReceiptBuild.fullReceiptNumber}...
+                  Checking receipt {editReceiptBuild.fullReceiptNumber}...
                 </p>
               )}
-              {editAvailability === 'available' && (
+              {editReceiptLookup.state === 'new' && (
                 <p className="text-[11px] text-emerald-400 flex items-center gap-1 font-mono tabular-nums">
                   <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-                  <span>Available: {editReceiptBuild.fullReceiptNumber}</span>
+                  <span>Unique to this entry: {editReceiptBuild.fullReceiptNumber}</span>
                 </p>
               )}
-              {editAvailability === 'duplicate' && (
-                <p className="text-[11px] text-red-400 flex items-center gap-1 font-mono tabular-nums">
-                  <XCircle className="w-3.5 h-3.5 shrink-0" />
-                  <span>Duplicate receipt: {editReceiptBuild.fullReceiptNumber} is already in use by another active donation.</span>
+              {editReceiptLookup.state === 'shared' && (
+                <p className="text-[11px] text-sky-300 flex items-center gap-1 font-mono tabular-nums">
+                  <Layers className="w-3.5 h-3.5 shrink-0 text-sky-400" />
+                  <span>
+                    Shared receipt: {editReceiptLookup.existingCount} other active{' '}
+                    {editReceiptLookup.existingCount === 1 ? 'donation' : 'donations'} (
+                    {formatINR(editReceiptLookup.existingTotal)}) also use {editReceiptBuild.fullReceiptNumber}.
+                  </span>
                 </p>
               )}
             </div>
@@ -853,7 +825,7 @@ export const DonationsScreen: React.FC = () => {
               </button>
               <button
                 type="submit"
-                disabled={isActionLoading || editAvailability === 'duplicate'}
+                disabled={isActionLoading}
                 className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors"
               >
                 {isActionLoading ? 'Saving Correction...' : 'Submit Correction'}
@@ -869,7 +841,7 @@ export const DonationsScreen: React.FC = () => {
         onClose={() => setIsCancelModalOpen(false)}
         onConfirm={handleConfirmCancel}
         title="Cancel / Mark Donation as Deleted"
-        description="Never permanently deleted: This donation will be marked as cancelled and excluded from active financial totals. Its receipt number will become available for reuse while full cancellation history remains in the audit log."
+        description="Never permanently deleted: This donation will be marked as cancelled and excluded from active financial totals, without affecting any other donations sharing the same receipt number. Full cancellation history remains in revisions and the audit log."
         confirmLabel="Cancel Donation"
         isDestructive={true}
         isLoading={isActionLoading}

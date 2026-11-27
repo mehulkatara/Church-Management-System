@@ -168,8 +168,8 @@ SPA single-page application routing is handled automatically via `"not_found_han
 - [x] Version concurrency protection on access approvals (`p_expected_version`).
 - [x] Return for Correction flow with audit reason visible to applicant.
 - [x] Membership status modification strictly restricted to church Accountants with mandatory reasons.
-- [x] Manual receipt number uniqueness enforced across all financial years (`uq_church_normalized_receipt`).
+- [x] Shared receipt numbers supported: multiple donations can share the same church-code + FY receipt number, while each submission stays idempotency-protected.
 - [x] Competition ranking (1, 2, 2, 4) includes inactive members' valid donations with stable secondary ordering.
-- [x] Soft deletion preserves audit snapshots; cancellations leave receipt numbers permanently reserved.
+- [x] Soft deletion preserves audit snapshots and cancels only the selected donation row.
 - [x] Excel spreadsheet export sanitizes cells starting with `=`, `+`, `-`, `@` to prevent formula injection.
 - [x] Run automated domain logic unit tests: `npx --yes tsx --test src/lib/domain-logic.test.ts`.
