@@ -77,6 +77,7 @@ interface ReasonModalProps {
   confirmLabel?: string;
   isDestructive?: boolean;
   isLoading?: boolean;
+  errorMessage?: string | null;
 }
 
 export const ReasonModal: React.FC<ReasonModalProps> = ({
@@ -88,6 +89,7 @@ export const ReasonModal: React.FC<ReasonModalProps> = ({
   confirmLabel = 'Submit Change',
   isDestructive = false,
   isLoading = false,
+  errorMessage = null,
 }) => {
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -115,6 +117,12 @@ export const ReasonModal: React.FC<ReasonModalProps> = ({
           <AlertTriangle className="w-5 h-5 shrink-0 text-amber-400 mt-0.5" />
           <div>{description}</div>
         </div>
+
+        {errorMessage && (
+          <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-300">
+            {errorMessage}
+          </div>
+        )}
 
         <div>
           <label htmlFor="reason-input" className="block text-xs font-medium text-slate-300 mb-1.5">

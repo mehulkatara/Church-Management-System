@@ -1757,7 +1757,7 @@ BEGIN
 END;
 $$;
 
--- 4. CHANGE MEMBER STATUS (Strictly restricted to church Accountants)
+-- 4. CHANGE MEMBER STATUS (Church Admin, Platform Admin, or Accountant)
 CREATE OR REPLACE FUNCTION public.change_member_status(
     p_church_id UUID,
     p_member_id UUID,
@@ -1771,7 +1771,7 @@ SET search_path = public
 AS $$
 DECLARE
     v_actor_id UUID := auth.uid();
-    v_has_accountant_role BOOLEAN;
+    v_role TEXT;
     v_old_member RECORD;
     v_new_member RECORD;
 BEGIN
@@ -1779,16 +1779,14 @@ BEGIN
         RAISE EXCEPTION 'Authentication required.';
     END IF;
 
-    SELECT EXISTS (
-        SELECT 1 FROM public.church_access
-        WHERE church_id = p_church_id
-          AND user_id = v_actor_id
-          AND role = 'accountant'
-          AND status = 'approved'
-    ) INTO v_has_accountant_role;
+    IF public.is_platform_admin(v_actor_id) THEN
+        v_role := 'admin';
+    ELSE
+        v_role := public.get_auth_church_role(p_church_id, v_actor_id);
+    END IF;
 
-    IF NOT v_has_accountant_role THEN
-        RAISE EXCEPTION 'Unauthorized: Only a user with an explicit, current Accountant assignment for this church may change membership status.';
+    IF v_role IS NULL OR v_role NOT IN ('admin', 'accountant') THEN
+        RAISE EXCEPTION 'Unauthorized: Only Church Admins, Platform Admins, and Accountants may change membership status.';
     END IF;
 
     IF p_new_status NOT IN ('active', 'inactive') THEN

@@ -331,11 +331,7 @@ export function calculateRankings(donors: DonorRankingInput[]): DonorRankedOutpu
 
 /**
  * Validates whether a user can change membership status (active <-> inactive).
- * STRICT BUSINESS RULE:
- * "Only a user with an explicit, current Accountant assignment for the member's church may change membership status.
- * Do not let platform Admin access implicitly satisfy this permission.
- * An Admin would require a separate authorized Accountant assignment for the relevant church to perform this operation.
- * Require a reason for Active-to-Inactive and Inactive-to-Active changes."
+ * Allowed for Platform Admins, Church Admins, and Church Accountants with a required audit reason.
  */
 export function validateMemberStatusChange(
   actor: { isPlatformAdmin: boolean; churchRoles: string[] },
@@ -343,12 +339,14 @@ export function validateMemberStatusChange(
   newStatus: MembershipStatus,
   reason?: string
 ): { allowed: boolean; error?: string } {
-  // Check if actor has explicit 'accountant' role in this church
-  const hasAccountantRole = actor.churchRoles.includes('accountant');
-  if (!hasAccountantRole) {
+  const hasPermission =
+    actor.isPlatformAdmin ||
+    actor.churchRoles.includes('admin') ||
+    actor.churchRoles.includes('accountant');
+  if (!hasPermission) {
     return {
       allowed: false,
-      error: 'Only users with an explicit Accountant assignment for this church can change membership status. Platform Admin access alone does not grant this permission.',
+      error: 'Only Church Admins, Platform Admins, and Accountants can change membership status.',
     };
   }
 
@@ -378,7 +376,7 @@ export type PermittedAction =
   | 'assign_collector_role' // Admin or Accountant (from church members)
   | 'create_member'
   | 'edit_member_basic' // Collector can edit name, contact phone
-  | 'change_member_status' // ONLY Accountant
+  | 'change_member_status' // Church Admin, Platform Admin, or Accountant
   | 'edit_village_name' // Admin, Accountant, and Collector
   | 'edit_gender' // Admin, Accountant, Collector, or Member (own profile)
   | 'create_donation' // Admin, Accountant, Collector
@@ -422,9 +420,9 @@ export function checkRolePermission(
         : { allowed: false, reason: 'Insufficient privileges.' };
 
     case 'change_member_status':
-      return role === 'accountant'
+      return role === 'platform_admin' || role === 'admin' || role === 'accountant'
         ? { allowed: true }
-        : { allowed: false, reason: 'Strictly restricted to church Accountants.' };
+        : { allowed: false, reason: 'Strictly restricted to Church Admins, Platform Admins, and Accountants.' };
 
     case 'edit_village_name':
       return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'collector'

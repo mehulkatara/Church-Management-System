@@ -124,34 +124,45 @@ test('Competition ranking logic: 1, 2, 2, 4 ties and active-only member filterin
   assert.equal(ranked[3].rank, 4);
 });
 
-test('Accountant-only member status change rule enforcement', () => {
-  // Case 1: Platform Admin without church accountant role -> REJECTED
-  const adminActor = { isPlatformAdmin: true, churchRoles: ['admin'] };
-  const res1 = validateMemberStatusChange(adminActor, 'active', 'inactive', 'Moved away');
-  assert.equal(res1.allowed, false);
-  assert.match(res1.error || '', /Accountant assignment/i);
+test('Admin, Platform Admin, and Accountant member status change rule enforcement', () => {
+  // Case 1: Platform Admin -> ALLOWED
+  const platformAdminActor = { isPlatformAdmin: true, churchRoles: ['admin'] };
+  const res1 = validateMemberStatusChange(platformAdminActor, 'active', 'inactive', 'Moved away');
+  assert.equal(res1.allowed, true);
 
-  // Case 2: Collector -> REJECTED
+  // Case 2: Church Admin without Accountant role -> ALLOWED
+  const churchAdminActor = { isPlatformAdmin: false, churchRoles: ['admin'] };
+  const res2 = validateMemberStatusChange(churchAdminActor, 'active', 'inactive', 'Moved away');
+  assert.equal(res2.allowed, true);
+
+  // Case 3: Collector -> REJECTED
   const collectorActor = { isPlatformAdmin: false, churchRoles: ['collector'] };
-  const res2 = validateMemberStatusChange(collectorActor, 'active', 'inactive', 'Moved away');
-  assert.equal(res2.allowed, false);
+  const res3 = validateMemberStatusChange(collectorActor, 'active', 'inactive', 'Moved away');
+  assert.equal(res3.allowed, false);
+  assert.match(res3.error || '', /Admins.*Accountants/i);
 
-  // Case 3: Accountant with valid reason -> ALLOWED
+  // Case 4: Accountant with valid reason -> ALLOWED
   const accountantActor = { isPlatformAdmin: false, churchRoles: ['accountant'] };
-  const res3 = validateMemberStatusChange(accountantActor, 'active', 'inactive', 'Relocated to another city');
-  assert.equal(res3.allowed, true);
+  const res4 = validateMemberStatusChange(accountantActor, 'active', 'inactive', 'Relocated to another city');
+  assert.equal(res4.allowed, true);
 
-  // Case 4: Accountant with missing reason -> REJECTED
-  const res4 = validateMemberStatusChange(accountantActor, 'active', 'inactive', '');
-  assert.equal(res4.allowed, false);
-  assert.match(res4.error || '', /reason.*required/i);
-
-  // Case 5: Same status -> REJECTED
-  const res5 = validateMemberStatusChange(accountantActor, 'active', 'active', 'Already active');
+  // Case 5: Missing reason -> REJECTED
+  const res5 = validateMemberStatusChange(churchAdminActor, 'active', 'inactive', '');
   assert.equal(res5.allowed, false);
+  assert.match(res5.error || '', /reason.*required/i);
+
+  // Case 6: Same status -> REJECTED
+  const res6 = validateMemberStatusChange(accountantActor, 'active', 'active', 'Already active');
+  assert.equal(res6.allowed, false);
 });
 
 test('Role permission checks align with specifications', () => {
+  // Admins and Accountants can change member status; Collector and Member cannot
+  assert.equal(checkRolePermission('platform_admin', 'change_member_status').allowed, true);
+  assert.equal(checkRolePermission('admin', 'change_member_status').allowed, true);
+  assert.equal(checkRolePermission('accountant', 'change_member_status').allowed, true);
+  assert.equal(checkRolePermission('member', 'change_member_status').allowed, false);
+
   // Collector cannot create members
   assert.equal(checkRolePermission('collector', 'create_member').allowed, false);
   // Collector can edit member basic info, village, and gender, but cannot change status

@@ -230,7 +230,7 @@ export const PublicHomePage: React.FC<PublicPageProps> = ({ onNavigate, isAuthen
             <h2 className="text-base font-semibold text-white">Financial-Year Audits</h2>
             <p className="text-xs text-slate-400 leading-relaxed">
               Tracks contributions across Indian Financial Years (1 April – 31 March) with
-              church-isolated access controls and Accountant-only status governance.
+              church-isolated access controls and Admin/Accountant status governance.
             </p>
           </div>
         </section>

@@ -13,6 +13,7 @@ import {
   buildMemberShareWhatsAppUrl,
   buildChurchMemberPrefix,
   computeNextChurchMemberNumber,
+  extractSupabaseErrorMessage,
 } from '../../lib/domain-logic';
 import {
   fetchLatestMemberShareLink,
@@ -41,7 +42,7 @@ import {
 } from 'lucide-react';
 
 export const MembersScreen: React.FC = () => {
-  const { activeChurch, activeRole, isPlatformAdmin, churchAccessList } = useAuth();
+  const { activeChurch, activeRole, isPlatformAdmin } = useAuth();
 
   const [members, setMembers] = useState<Member[]>([]);
   const [villageOptions, setVillageOptions] = useState<string[]>([]);
@@ -55,7 +56,7 @@ export const MembersScreen: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-  // Status Change State (Accountant Only!)
+  // Status Change State (Church Admin, Platform Admin, or Accountant)
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [statusTargetMember, setStatusTargetMember] = useState<Member | null>(null);
   const [statusNewValue, setStatusNewValue] = useState<MembershipStatus>('inactive');
@@ -83,10 +84,10 @@ export const MembersScreen: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
 
   // PERMISSION CHECKS
-  // Check if current user has an EXPLICIT 'accountant' role in this church
-  const isExplicitChurchAccountant = churchAccessList.some(
-    (a) => a.church_id === activeChurch?.id && a.role === 'accountant' && a.status === 'approved'
-  );
+  const canChangeMemberStatus = checkRolePermission(
+    isPlatformAdmin ? 'platform_admin' : activeRole,
+    'change_member_status'
+  ).allowed;
 
   const canCreateMember = isPlatformAdmin || activeRole === 'admin' || activeRole === 'accountant';
   const canEditVillage =
@@ -324,7 +325,7 @@ export const MembersScreen: React.FC = () => {
     setFieldErrors({});
   };
 
-  // Open Status Change Reason Modal (ACCOUNTANT ONLY)
+  // Open Status Change Reason Modal (Church Admin, Platform Admin, or Accountant)
   const openStatusChangeModal = (member: Member) => {
     setStatusTargetMember(member);
     setStatusNewValue(member.membership_status === 'active' ? 'inactive' : 'active');
@@ -334,13 +335,26 @@ export const MembersScreen: React.FC = () => {
 
   // Submit Status Change via change_member_status RPC
   const handleConfirmStatusChange = async (reason: string) => {
-    if (!supabase || !statusTargetMember || !activeChurch) return;
+    if (!statusTargetMember || !activeChurch) return;
+
+    if (!supabase) {
+      setMembers((prev) =>
+        prev.map((m) =>
+          m.id === statusTargetMember.id
+            ? { ...m, membership_status: statusNewValue, updated_at: new Date().toISOString() }
+            : m
+        )
+      );
+      setIsStatusModalOpen(false);
+      setStatusTargetMember(null);
+      return;
+    }
 
     setIsStatusLoading(true);
     setStatusError(null);
 
     try {
-      const { data, error } = await supabase.rpc('change_member_status', {
+      const { error } = await supabase.rpc('change_member_status', {
         p_church_id: activeChurch.id,
         p_member_id: statusTargetMember.id,
         p_new_status: statusNewValue,
@@ -353,7 +367,7 @@ export const MembersScreen: React.FC = () => {
       setStatusTargetMember(null);
       await fetchMembers();
     } catch (err: unknown) {
-      setStatusError(err instanceof Error ? err.message : 'Status update failed.');
+      setStatusError(extractSupabaseErrorMessage(err, 'Status update failed.'));
     } finally {
       setIsStatusLoading(false);
     }
@@ -538,13 +552,13 @@ export const MembersScreen: React.FC = () => {
           </span>
           <span className="flex items-center gap-1.5 text-slate-400">
             <Lock className="w-3.5 h-3.5 text-amber-400" />
-            {isExplicitChurchAccountant ? (
+            {canChangeMemberStatus ? (
               <span className="text-emerald-400">
-                You are assigned as Accountant: Membership status toggles enabled
+                Membership status toggles enabled (Admin / Accountant)
               </span>
             ) : (
               <span className="text-slate-400">
-                Membership status changes strictly restricted to church Accountants
+                Membership status changes restricted to Church Admins and Accountants
               </span>
             )}
           </span>
@@ -617,7 +631,7 @@ export const MembersScreen: React.FC = () => {
                         {m.gender ? GENDER_LABELS[m.gender] : <span className="text-slate-600">&mdash;</span>}
                       </td>
                       <td className="py-3 px-4 text-center">
-                        {/* Status Badge + Accountant-Only Action */}
+                        {/* Status Badge + Admin/Accountant Action */}
                         <div className="inline-flex items-center gap-1.5">
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
@@ -629,12 +643,12 @@ export const MembersScreen: React.FC = () => {
                             {m.membership_status.toUpperCase()}
                           </span>
 
-                          {/* STRICT: Only church Accountants see/can click status toggle */}
-                          {isExplicitChurchAccountant && (
+                          {canChangeMemberStatus && (
                             <button
+                              type="button"
                               onClick={() => openStatusChangeModal(m)}
                               title={`Change status to ${isActive ? 'Inactive' : 'Active'} (Reason required)`}
-                              className="text-[10px] text-sky-400 hover:text-sky-300 underline font-medium ml-1"
+                              className="text-[10px] text-sky-400 hover:text-sky-300 underline font-medium ml-1 cursor-pointer"
                             >
                               Toggle
                             </button>
@@ -825,8 +839,8 @@ export const MembersScreen: React.FC = () => {
                 {buildChurchMemberPrefix(activeChurch?.code)}1
               </span>{' '}
               (existing member IDs remain unchanged) and an initial status of{' '}
-              <strong className="text-slate-200">Active</strong>. Only an authorized church
-              Accountant can subsequently change membership status.
+              <strong className="text-slate-200">Active</strong>. Church Admins, Platform Admins,
+              and Accountants can subsequently change membership status.
             </p>
 
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
@@ -979,20 +993,22 @@ export const MembersScreen: React.FC = () => {
         </Modal>
       )}
 
-      {/* ACCOUNTANT-ONLY MEMBERSHIP STATUS CHANGE REASON MODAL */}
+      {/* MEMBERSHIP STATUS CHANGE REASON MODAL (Admin / Accountant) */}
       {statusTargetMember && (
         <ReasonModal
           isOpen={isStatusModalOpen}
           onClose={() => {
             setIsStatusModalOpen(false);
             setStatusTargetMember(null);
+            setStatusError(null);
           }}
           onConfirm={handleConfirmStatusChange}
           title={`Change Membership Status to ${statusNewValue.toUpperCase()}`}
-          description={`Strict specification rule: Only an assigned church Accountant may change member status. Marking a member Inactive does not cancel valid historical donations or delete ranking history. Reason is permanently logged in the audit trail.`}
+          description={`Only Church Admins, Platform Admins, and Accountants may change member status. Marking a member Inactive does not cancel valid historical donations or delete ranking history. Reason is permanently logged in the audit trail.`}
           confirmLabel={`Mark as ${statusNewValue.toUpperCase()}`}
           isDestructive={statusNewValue === 'inactive'}
           isLoading={isStatusLoading}
+          errorMessage={statusError}
         />
       )}
 
