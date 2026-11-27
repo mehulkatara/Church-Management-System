@@ -335,7 +335,7 @@ WHERE email = 'admin@yourchurch.org';`}
                     Canonical Complete Database Schema
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Single canonical schema: <code>supabase/complete_schema.sql</code> (21 tables, RLS policies, triggers &amp; atomic RPCs)
+                    Single canonical schema: <code>supabase/complete_schema.sql</code> (22 tables, RLS policies, triggers &amp; atomic RPCs)
                   </p>
                 </div>
                 <button
@@ -348,10 +348,10 @@ WHERE email = 'admin@yourchurch.org';`}
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs font-mono text-slate-300 space-y-1">
-                <p className="text-sky-400">-- All 21 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
+                <p className="text-sky-400">-- All 22 tables in supabase/complete_schema.sql (all with RLS enabled):</p>
                 <p>churches, profiles, platform_admins, church_access, members, member_account_links,</p>
                 <p>member_share_links, access_requests, donation_categories, expense_categories, receiving_accounts,</p>
-                <p>donations, donation_revisions, expenses, audit_logs, church_settings, church_sms_gateways,</p>
+                <p>donations, donation_revisions, expenses, expense_revisions, audit_logs, church_settings, church_sms_gateways,</p>
                 <p>notifications, notification_jobs, notification_attempts, report_exports</p>
               </div>
 

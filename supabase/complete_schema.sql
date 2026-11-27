@@ -1,15 +1,15 @@
 -- ==============================================================================
 -- CHURCH MANAGEMENT SYSTEM - ALWAYS-UPDATED COMPLETE SCHEMA & FULL RESET SCRIPT
 -- File: supabase/complete_schema.sql
--- Note: Canonical single-file PostgreSQL schema (currently 21 tables, RLS
+-- Note: Canonical single-file PostgreSQL schema (currently 22 tables, RLS
 --       policies, triggers, and atomic RPCs).
 -- WARNING: DESTRUCTIVE RESET!
 -- Running this script deletes ALL existing tables, views, functions, triggers,
 -- policies, and data in the `public` schema, then recreates everything cleanly:
 --   0. Drops existing trigger on auth.users and all non-extension public objects
---   1. Creates all 21 tables, constraints, and indexes
+--   1. Creates all 22 tables, constraints, and indexes
 --   2. Creates auth.users -> public.profiles sync trigger
---   3. Enables Row Level Security (RLS) on ALL 21 tables + complete policies
+--   3. Enables Row Level Security (RLS) on ALL 22 tables + complete policies
 --   4. Installs deterministic role helper functions
 --   5. Installs all SECURITY DEFINER atomic RPCs
 --   6. Backfills public.profiles from any existing auth.users rows
@@ -461,6 +461,25 @@ CREATE INDEX IF NOT EXISTS idx_expenses_category
 CREATE INDEX IF NOT EXISTS idx_expenses_account
     ON public.expenses(paid_from_account_id);
 
+-- 23. EXPENSE REVISIONS (Append-only history of creations, corrections, and cancellations)
+CREATE TABLE IF NOT EXISTS public.expense_revisions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    expense_id UUID NOT NULL REFERENCES public.expenses(id) ON DELETE RESTRICT,
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE RESTRICT,
+    revision_number INT NOT NULL,
+    change_type TEXT NOT NULL CHECK (change_type IN ('created', 'corrected', 'cancelled')),
+    previous_snapshot JSONB,
+    new_snapshot JSONB NOT NULL,
+    actor_user_id UUID REFERENCES auth.users(id),
+    reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+    CONSTRAINT uq_expense_revision_seq UNIQUE (expense_id, revision_number)
+);
+CREATE INDEX IF NOT EXISTS idx_expense_revisions_expense
+    ON public.expense_revisions(expense_id);
+CREATE INDEX IF NOT EXISTS idx_expense_revisions_church
+    ON public.expense_revisions(church_id, created_at DESC);
+
 -- ==============================================================================
 -- SECTION 2: AUTH USER PROFILE TRIGGER
 -- Automatically creates a public.profiles row whenever an auth.users account is created
@@ -754,7 +773,7 @@ CREATE TRIGGER trg_assign_church_member_number
     FOR EACH ROW EXECUTE FUNCTION public.assign_church_member_number();
 
 -- ==============================================================================
--- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 21 TABLES
+-- SECTION 3: ENABLE ROW LEVEL SECURITY (RLS) ON ALL 22 TABLES
 -- ==============================================================================
 
 ALTER TABLE public.churches ENABLE ROW LEVEL SECURITY;
@@ -778,6 +797,7 @@ ALTER TABLE public.member_share_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.church_sms_gateways ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expense_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.expense_revisions ENABLE ROW LEVEL SECURITY;
 
 -- ==============================================================================
 -- SECTION 4: SECURITY HELPER FUNCTIONS
@@ -1144,6 +1164,18 @@ CREATE POLICY "Church admins and accountants can view expenses"
         public.is_platform_admin(auth.uid())
         OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
     );
+
+-- 19. EXPENSE REVISIONS RLS (Append-only; readable strictly by Admin & Accountant; writes strictly via SECURITY DEFINER RPCs)
+DROP POLICY IF EXISTS "Church admins and accountants can view expense revisions" ON public.expense_revisions;
+CREATE POLICY "Church admins and accountants can view expense revisions"
+    ON public.expense_revisions FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+GRANT SELECT ON public.expenses TO authenticated;
+GRANT SELECT ON public.expense_revisions TO authenticated;
 
 -- ==============================================================================
 -- SECTION 6: ATOMIC BUSINESS & SECURITY DEFINER RPCS
@@ -3821,6 +3853,26 @@ BEGIN
 
     SELECT * INTO v_new_expense FROM public.expenses WHERE id = v_expense_id;
 
+    INSERT INTO public.expense_revisions (
+        expense_id,
+        church_id,
+        revision_number,
+        change_type,
+        previous_snapshot,
+        new_snapshot,
+        actor_user_id,
+        reason
+    ) VALUES (
+        v_expense_id,
+        p_church_id,
+        1,
+        'created',
+        NULL,
+        to_jsonb(v_new_expense),
+        v_actor_id,
+        'Initial expense entry'
+    );
+
     INSERT INTO public.audit_logs (
         church_id,
         actor_user_id,
@@ -3878,6 +3930,7 @@ DECLARE
     v_clean_payee TEXT;
     v_clean_bill_ref TEXT;
     v_clean_notes TEXT;
+    v_next_revision INT;
 BEGIN
     IF v_actor_id IS NULL THEN
         RAISE EXCEPTION 'Authentication required.';
@@ -3964,6 +4017,29 @@ BEGIN
     WHERE id = p_expense_id
     RETURNING * INTO v_new_expense;
 
+    SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
+    FROM public.expense_revisions WHERE expense_id = p_expense_id;
+
+    INSERT INTO public.expense_revisions (
+        expense_id,
+        church_id,
+        revision_number,
+        change_type,
+        previous_snapshot,
+        new_snapshot,
+        actor_user_id,
+        reason
+    ) VALUES (
+        p_expense_id,
+        v_church_id,
+        v_next_revision,
+        'corrected',
+        to_jsonb(v_old_expense),
+        to_jsonb(v_new_expense),
+        v_actor_id,
+        trim(p_reason)
+    );
+
     INSERT INTO public.audit_logs (
         church_id,
         actor_user_id,
@@ -4006,6 +4082,7 @@ DECLARE
     v_new_expense RECORD;
     v_church_id UUID;
     v_role TEXT;
+    v_next_revision INT;
 BEGIN
     IF v_actor_id IS NULL THEN
         RAISE EXCEPTION 'Authentication required.';
@@ -4042,6 +4119,29 @@ BEGIN
         deletion_reason = trim(p_reason)
     WHERE id = p_expense_id
     RETURNING * INTO v_new_expense;
+
+    SELECT COALESCE(MAX(revision_number), 0) + 1 INTO v_next_revision
+    FROM public.expense_revisions WHERE expense_id = p_expense_id;
+
+    INSERT INTO public.expense_revisions (
+        expense_id,
+        church_id,
+        revision_number,
+        change_type,
+        previous_snapshot,
+        new_snapshot,
+        actor_user_id,
+        reason
+    ) VALUES (
+        p_expense_id,
+        v_church_id,
+        v_next_revision,
+        'cancelled',
+        to_jsonb(v_old_expense),
+        to_jsonb(v_new_expense),
+        v_actor_id,
+        trim(p_reason)
+    );
 
     INSERT INTO public.audit_logs (
         church_id,

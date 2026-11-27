@@ -192,6 +192,20 @@ export interface DonationRevision {
   actor_profile?: Profile;
 }
 
+export interface ExpenseRevision {
+  id: string;
+  expense_id: string;
+  church_id: string;
+  revision_number: number;
+  change_type: RevisionType;
+  previous_snapshot: Partial<Expense> | null;
+  new_snapshot: Partial<Expense>;
+  actor_user_id: string | null;
+  reason: string | null;
+  created_at: string;
+  actor_profile?: Profile;
+}
+
 export interface AuditLog {
   id: string;
   church_id: string | null;

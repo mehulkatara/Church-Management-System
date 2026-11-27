@@ -5,6 +5,7 @@ import type { ScreenId } from '../common/Sidebar';
 import type {
   Expense,
   ExpenseCategory,
+  ExpenseRevision,
   ReceivingAccount,
   PaymentMethod,
 } from '../../types/database';
@@ -25,6 +26,7 @@ import {
   Trash2,
   XCircle,
   AlertCircle,
+  History,
 } from 'lucide-react';
 
 interface ExpensesScreenProps {
@@ -66,6 +68,9 @@ export const ExpensesScreen: React.FC<ExpensesScreenProps> = ({ onNavigate }) =>
 
   // Selected expense for Details / Correct / Cancel modals
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  const [revisions, setRevisions] = useState<ExpenseRevision[]>([]);
+  const [isLoadingRevisions, setIsLoadingRevisions] = useState(false);
+  const [revisionsError, setRevisionsError] = useState<string | null>(null);
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
   const [isCorrectModalOpen, setIsCorrectModalOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
@@ -226,6 +231,35 @@ export const ExpensesScreen: React.FC<ExpensesScreenProps> = ({ onNavigate }) =>
     () => computeExpenseCurrentMonthSummary(expenses),
     [expenses]
   );
+
+  const handleOpenDetails = async (expense: Expense) => {
+    setSelectedExpense(expense);
+    setRevisions([]);
+    setRevisionsError(null);
+    setIsLoadingRevisions(true);
+    setActionError(null);
+
+    try {
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('expense_revisions')
+          .select('*')
+          .eq('expense_id', expense.id)
+          .order('revision_number', { ascending: true });
+
+        if (error) {
+          throw error;
+        }
+        setRevisions((data || []) as ExpenseRevision[]);
+      }
+    } catch (err: unknown) {
+      setRevisionsError(
+        getErrorMessage(err, 'Unable to load expense revision history.')
+      );
+    } finally {
+      setIsLoadingRevisions(false);
+    }
+  };
 
   const handleOpenRecordModal = () => {
     setActionError(null);
@@ -657,10 +691,7 @@ export const ExpensesScreen: React.FC<ExpensesScreenProps> = ({ onNavigate }) =>
                       <td className="py-3 px-4 text-right space-x-1 whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => {
-                            setActionError(null);
-                            setSelectedExpense(exp);
-                          }}
+                          onClick={() => handleOpenDetails(exp)}
                           title="View Expense Details"
                           className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
                         >
@@ -942,6 +973,83 @@ export const ExpensesScreen: React.FC<ExpensesScreenProps> = ({ onNavigate }) =>
                 </p>
               </div>
             )}
+
+            {/* Append-Only Revisions History */}
+            <div className="space-y-2">
+              <h3 className="font-semibold text-white flex items-center gap-2">
+                <History className="w-4 h-4 text-sky-400" />
+                <span>Append-Only Revisions History</span>
+              </h3>
+
+              {isLoadingRevisions ? (
+                <p className="text-slate-500">Loading revisions...</p>
+              ) : revisionsError ? (
+                <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-300 text-[11px]">
+                  {revisionsError}
+                </div>
+              ) : revisions.length === 0 ? (
+                <p className="text-slate-500">
+                  No revision rows found yet. Run the expense_revisions backfill SQL if this expense predates revision tracking.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-56 overflow-y-auto">
+                  {revisions.map((rev) => {
+                    const typeColor =
+                      rev.change_type === 'cancelled'
+                        ? 'text-red-400'
+                        : rev.change_type === 'created'
+                          ? 'text-emerald-400'
+                          : 'text-sky-300';
+                    const nextAmount =
+                      rev.new_snapshot?.amount !== undefined &&
+                      rev.new_snapshot?.amount !== null
+                        ? Number(rev.new_snapshot.amount)
+                        : null;
+                    const prevAmount =
+                      rev.previous_snapshot?.amount !== undefined &&
+                      rev.previous_snapshot?.amount !== null
+                        ? Number(rev.previous_snapshot.amount)
+                        : null;
+
+                    return (
+                      <div
+                        key={rev.id}
+                        className="bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-1 text-[11px]"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className={`font-mono font-semibold ${typeColor}`}>
+                            Rev #{rev.revision_number} &bull; {rev.change_type.toUpperCase()}
+                          </span>
+                          <span className="text-slate-500 font-mono tabular-nums">
+                            {new Date(rev.created_at).toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-slate-300">
+                          {rev.new_snapshot?.payee_name && (
+                            <span>Payee: {rev.new_snapshot.payee_name}</span>
+                          )}
+                          {nextAmount !== null && (
+                            <span className="font-mono tabular-nums text-amber-400">
+                              {prevAmount !== null && prevAmount !== nextAmount
+                                ? `${formatINR(prevAmount)} → ${formatINR(nextAmount)}`
+                                : formatINR(nextAmount)}
+                            </span>
+                          )}
+                          {rev.new_snapshot?.expense_date && (
+                            <span className="font-mono tabular-nums text-slate-400">
+                              Date: {rev.new_snapshot.expense_date}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-400">
+                          Reason: <span className="text-slate-200">{rev.reason || 'Recorded entry'}</span>
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             <div className="flex items-center justify-between pt-3 border-t border-slate-800">
               <button
