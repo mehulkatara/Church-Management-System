@@ -34,7 +34,10 @@ import {
   estimateSmsSegments,
   filterBroadcastMembers,
   validateBroadcastInput,
+  mergeFinancialYearOptions,
+  splitIntoGraphemeClusters,
 } from './domain-logic';
+import { fetchAllPages } from './supabase-pagination';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
   // March 31, 2026 is the last day of FY 2025-26
@@ -1178,3 +1181,48 @@ test('estimateSmsSegments and validateBroadcastInput compute GSM/Unicode limits 
   assert.equal(ok.valid, true);
   assert.equal(ok.normalizedTitle, 'Dear {{first_name}}, join Sunday service.');
 });
+
+test('mergeFinancialYearOptions discovers older/newer years from record dates and fills contiguous range newest-first', () => {
+  const options = mergeFinancialYearOptions(
+    5,
+    ['2019-06-15', '2023-24', '2027-05-10', null, 'invalid'],
+    new Date('2026-11-28T00:00:00Z')
+  );
+
+  const codes = options.map((o) => o.fyCode);
+  assert.equal(codes[0], '2027-28');
+  assert.ok(codes.includes('2026-27'));
+  assert.ok(codes.includes('2025-26'));
+  assert.ok(codes.includes('2024-25'));
+  assert.ok(codes.includes('2023-24'));
+  assert.ok(codes.includes('2022-23'));
+  assert.ok(codes.includes('2021-22'));
+  assert.ok(codes.includes('2020-21'));
+  assert.equal(codes[codes.length - 1], '2019-20');
+  assert.equal(new Set(codes).size, codes.length);
+});
+
+test('splitIntoGraphemeClusters keeps Gujarati vowel signs and conjuncts intact', () => {
+  const clusters = splitIntoGraphemeClusters('ગુજરાતી');
+  assert.deepEqual(clusters, ['ગુ', 'જ', 'રા', 'તી']);
+});
+
+test('fetchAllPages iterates past 1000-row limits until final short page', async () => {
+  const dataset = Array.from({ length: 2350 }, (_, idx) => ({ id: idx + 1 }));
+  const calls: Array<{ from: number; to: number }> = [];
+
+  const result = await fetchAllPages(async (from, to) => {
+    calls.push({ from, to });
+    return { data: dataset.slice(from, to + 1), error: null };
+  }, 1000);
+
+  assert.equal(result.length, 2350);
+  assert.equal(result[0].id, 1);
+  assert.equal(result[2349].id, 2350);
+  assert.deepEqual(calls, [
+    { from: 0, to: 999 },
+    { from: 1000, to: 1999 },
+    { from: 2000, to: 2999 },
+  ]);
+});
+

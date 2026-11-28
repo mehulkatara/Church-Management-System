@@ -10,19 +10,24 @@ import type {
   ReceivingAccount,
 } from '../../types/database';
 import {
-  getFinancialYearOptions,
+  mergeFinancialYearOptions,
   formatINR,
   sanitizeExcelCell,
   buildExpenseCategoryBreakdown,
   buildMonthlyCashFlowTrend,
 } from '../../lib/domain-logic';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { fetchAllPages } from '../../lib/supabase-pagination';
+import {
+  exportFinancialReportPdf,
+  type PdfTableColumn,
+} from '../../lib/pdf-report-renderer';
 import * as XLSX from 'xlsx';
 import {
   FileSpreadsheet,
   Download,
   CheckCircle,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 
 type ReportType =
@@ -42,8 +47,12 @@ export const ReportsScreen: React.FC = () => {
   const isStaff = activeRole === 'admin' || activeRole === 'accountant' || isPlatformAdmin;
   const isMember = activeRole === 'member';
 
-  const fyOptions = useMemo(() => getFinancialYearOptions(5), []);
-  const [selectedFy, setSelectedFy] = useState(fyOptions[0].fyCode);
+  const [discoveredFyInputs, setDiscoveredFyInputs] = useState<string[]>([]);
+  const fyOptions = useMemo(
+    () => mergeFinancialYearOptions(7, discoveredFyInputs),
+    [discoveredFyInputs]
+  );
+  const [selectedFy, setSelectedFy] = useState(() => mergeFinancialYearOptions(7, [])[0].fyCode);
   const [reportType, setReportType] = useState<ReportType>(
     isMember ? 'member_statement' : 'transaction_register'
   );
@@ -62,85 +71,218 @@ export const ReportsScreen: React.FC = () => {
   const [categories, setCategories] = useState<DonationCategory[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [accounts, setAccounts] = useState<ReceivingAccount[]>([]);
+  const [linkedMemberId, setLinkedMemberId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
+  const currentFyInfo = useMemo(
+    () => fyOptions.find((f) => f.fyCode === selectedFy) || fyOptions[0],
+    [fyOptions, selectedFy]
+  );
+
+  // 1. Load church master lookups & discover earliest/latest FY dates once per church
   useEffect(() => {
     if (!supabase || !activeChurch) {
-      setIsLoading(false);
+      setDiscoveredFyInputs([]);
+      setMembers([]);
+      setCategories([]);
+      setExpenseCategories([]);
+      setAccounts([]);
+      setLinkedMemberId(null);
       return;
     }
 
-    const fetchData = async () => {
-      setIsLoading(true);
-      try {
-        // Fetch donations for active church
-        let query = supabase
-          .from('donations')
-          .select(`
-            *,
-            member:members(*),
-            category:donation_categories(*),
-            receiving_account:receiving_accounts(*)
-          `)
-          .eq('church_id', activeChurch.id)
-          .is('deleted_at', null)
-          .order('donation_date', { ascending: true });
+    const client = supabase;
+    let cancelled = false;
 
-        // If member role: strictly scope to own records
+    const loadMasterAndFyBounds = async () => {
+      try {
+        let memberLinkId: string | null = null;
         if (isMember && user) {
-          const { data: linkData } = await supabase
+          const { data: linkData } = await client
             .from('member_account_links')
             .select('member_id')
             .eq('user_id', user.id)
             .eq('church_id', activeChurch.id)
             .maybeSingle();
 
-          if (linkData) {
-            query = query.eq('member_id', linkData.member_id);
-            setSelectedMemberId(linkData.member_id);
-          } else {
-            setDonations([]);
-            setExpenses([]);
-            setIsLoading(false);
-            return;
+          memberLinkId = linkData?.member_id || null;
+          if (!cancelled) {
+            setLinkedMemberId(memberLinkId);
+            setSelectedMemberId(memberLinkId || '');
           }
+        } else if (!cancelled) {
+          setLinkedMemberId(null);
         }
 
-        const { data: donationData, error } = await query;
-        if (error) throw error;
-        setDonations((donationData || []) as Donation[]);
+        // Discover earliest & latest donation/expense dates so every active FY appears in dropdown
+        const buildDonationDateBoundQuery = (ascending: boolean) => {
+          let q = client
+            .from('donations')
+            .select('donation_date, financial_year')
+            .eq('church_id', activeChurch.id)
+            .is('deleted_at', null);
+          if (isMember && memberLinkId) {
+            q = q.eq('member_id', memberLinkId);
+          }
+          return q.order('donation_date', { ascending }).limit(1);
+        };
+
+        const [{ data: minDon }, { data: maxDon }] =
+          isMember && !memberLinkId
+            ? [{ data: [] }, { data: [] }]
+            : await Promise.all([
+                buildDonationDateBoundQuery(true),
+                buildDonationDateBoundQuery(false),
+              ]);
+
+        const discovered: string[] = [];
+        for (const row of [...(minDon || []), ...(maxDon || [])]) {
+          if (row?.donation_date) discovered.push(row.donation_date);
+          if (row?.financial_year) discovered.push(row.financial_year);
+        }
 
         if (isStaff) {
           const [
-            { data: memData },
+            allMembers,
             { data: catData },
             { data: expCatData },
             { data: accData },
-            { data: expData },
+            { data: minExp },
+            { data: maxExp },
           ] = await Promise.all([
-            supabase
-              .from('members')
-              .select('*')
-              .eq('church_id', activeChurch.id)
-              .order('full_name'),
-            supabase
+            fetchAllPages<Member>((from, to) =>
+              client
+                .from('members')
+                .select('*')
+                .eq('church_id', activeChurch.id)
+                .order('full_name')
+                .order('id')
+                .range(from, to)
+            ),
+            client
               .from('donation_categories')
               .select('*')
               .eq('church_id', activeChurch.id)
               .order('name'),
-            supabase
+            client
               .from('expense_categories')
               .select('*')
               .eq('church_id', activeChurch.id)
               .order('name'),
-            supabase
+            client
               .from('receiving_accounts')
               .select('*')
               .eq('church_id', activeChurch.id)
               .order('account_name'),
-            supabase
+            client
+              .from('expenses')
+              .select('expense_date')
+              .eq('church_id', activeChurch.id)
+              .is('deleted_at', null)
+              .order('expense_date', { ascending: true })
+              .limit(1),
+            client
+              .from('expenses')
+              .select('expense_date')
+              .eq('church_id', activeChurch.id)
+              .is('deleted_at', null)
+              .order('expense_date', { ascending: false })
+              .limit(1),
+          ]);
+
+          for (const row of [...(minExp || []), ...(maxExp || [])]) {
+            if (row?.expense_date) discovered.push(row.expense_date);
+          }
+
+          if (!cancelled) {
+            setMembers(allMembers);
+            setCategories((catData || []) as DonationCategory[]);
+            setExpenseCategories((expCatData || []) as ExpenseCategory[]);
+            setAccounts((accData || []) as ReceivingAccount[]);
+          }
+        }
+
+        if (!cancelled) {
+          setDiscoveredFyInputs(discovered);
+        }
+      } catch (err) {
+        console.error('Error loading report lookups:', err);
+      }
+    };
+
+    void loadMasterAndFyBounds();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeChurch, isStaff, isMember, user]);
+
+  // 2. Fetch paginated donations & expenses strictly scoped to the selected Financial Year
+  useEffect(() => {
+    if (!supabase || !activeChurch) {
+      setIsLoading(false);
+      return;
+    }
+
+    const client = supabase;
+    let cancelled = false;
+
+    const fetchFyRecords = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+
+      try {
+        let memberFilterId: string | null = linkedMemberId;
+        if (isMember && user && !memberFilterId) {
+          const { data: linkData } = await client
+            .from('member_account_links')
+            .select('member_id')
+            .eq('user_id', user.id)
+            .eq('church_id', activeChurch.id)
+            .maybeSingle();
+
+          memberFilterId = linkData?.member_id || null;
+          if (!memberFilterId) {
+            if (!cancelled) {
+              setDonations([]);
+              setExpenses([]);
+              setIsLoading(false);
+            }
+            return;
+          }
+        }
+
+        const donationRows = await fetchAllPages<Donation>((from, to) => {
+          let query = client
+            .from('donations')
+            .select(`
+              *,
+              member:members(*),
+              category:donation_categories(*),
+              receiving_account:receiving_accounts(*)
+            `)
+            .eq('church_id', activeChurch.id)
+            .is('deleted_at', null)
+            .gte('donation_date', currentFyInfo.startDate)
+            .lte('donation_date', currentFyInfo.endDate)
+            .order('donation_date', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+
+          if (isMember && memberFilterId) {
+            query = query.eq('member_id', memberFilterId);
+          }
+
+          return query;
+        });
+
+        let expenseRows: Expense[] = [];
+        if (isStaff) {
+          expenseRows = await fetchAllPages<Expense>((from, to) =>
+            client
               .from('expenses')
               .select(`
                 *,
@@ -149,28 +291,44 @@ export const ReportsScreen: React.FC = () => {
               `)
               .eq('church_id', activeChurch.id)
               .is('deleted_at', null)
-              .order('expense_date', { ascending: true }),
-          ]);
+              .gte('expense_date', currentFyInfo.startDate)
+              .lte('expense_date', currentFyInfo.endDate)
+              .order('expense_date', { ascending: true })
+              .order('id', { ascending: true })
+              .range(from, to)
+          );
+        }
 
-          setMembers((memData || []) as Member[]);
-          setCategories((catData || []) as DonationCategory[]);
-          setExpenseCategories((expCatData || []) as ExpenseCategory[]);
-          setAccounts((accData || []) as ReceivingAccount[]);
-          setExpenses((expData || []) as Expense[]);
-        } else {
-          setExpenses([]);
+        if (!cancelled) {
+          setDonations(donationRows);
+          setExpenses(expenseRows);
         }
       } catch (err) {
         console.error('Error fetching report data:', err);
+        if (!cancelled) {
+          setLoadError('Unable to load financial records for the selected financial year.');
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
     };
 
-    void fetchData();
-  }, [activeChurch, isStaff, isMember, user]);
+    void fetchFyRecords();
 
-  const currentFyInfo = fyOptions.find((f) => f.fyCode === selectedFy) || fyOptions[0];
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeChurch,
+    isStaff,
+    isMember,
+    user,
+    linkedMemberId,
+    currentFyInfo.startDate,
+    currentFyInfo.endDate,
+  ]);
 
   const fyDonations = useMemo(
     () =>
@@ -279,56 +437,44 @@ export const ReportsScreen: React.FC = () => {
     }
   }
 
-  // 1. GENERATE REAL PDF REPORT
-  const handleExportPDF = () => {
+  // 1. GENERATE REAL PDF REPORT WITH FULL GUJARATI OPENTYPE SHAPING
+  const handleExportPDF = async () => {
     setIsExporting(true);
     setExportMessage(null);
 
     try {
-      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const churchName = activeChurch?.name || 'Church';
       const genDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
-      // Header Banner
-      doc.setFillColor(30, 41, 59);
-      doc.rect(0, 0, 210, 32, 'F');
-
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(14);
-      doc.setFont('helvetica', 'bold');
-      doc.text(churchName, 14, 12);
-
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(203, 213, 225);
-      doc.text(`Financial Report: ${getReportTitle(reportType)}`, 14, 18);
-      doc.text(`Period: ${currentFyInfo.label} (${currentFyInfo.startDate} to ${currentFyInfo.endDate})`, 14, 24);
-
-      doc.setFontSize(8);
-      doc.setTextColor(148, 163, 184);
-      doc.text(`Generated: ${genDate} (Asia/Kolkata)`, 140, 24);
-
-      doc.setTextColor(30, 41, 59);
+      let columns: PdfTableColumn[] = [];
+      let rows: string[][] = [];
+      let footerRow: string[] | undefined;
 
       if (reportType === 'member_directory') {
-        const tableRows = directoryMembers.map((m) => [
+        columns = [
+          { header: 'Member #', widthMm: 28, align: 'left' },
+          { header: 'Full Name', widthMm: 62, align: 'left' },
+          { header: 'Village', widthMm: 44, align: 'left' },
+          { header: 'Phone', widthMm: 30, align: 'left' },
+          { header: 'Status', widthMm: 22, align: 'center' },
+        ];
+        rows = directoryMembers.map((m) => [
           m.member_number,
           m.full_name,
           m.village_name || '-',
           m.contact_phone || '-',
           m.membership_status.toUpperCase(),
         ]);
-
-        autoTable(doc, {
-          startY: 38,
-          head: [['Member #', 'Full Name', 'Village', 'Phone', 'Status']],
-          body: tableRows,
-          theme: 'striped',
-          headStyles: { fillColor: [15, 23, 42] },
-          styles: { fontSize: 8 },
-        });
       } else if (reportType === 'expense_register') {
-        const tableRows = filteredExpenses.map((e) => [
+        columns = [
+          { header: 'Date', widthMm: 23, align: 'left' },
+          { header: 'Payee', widthMm: 42, align: 'left' },
+          { header: 'Bill Ref', widthMm: 25, align: 'left' },
+          { header: 'Category', widthMm: 34, align: 'left' },
+          { header: 'Paid From', widthMm: 36, align: 'left' },
+          { header: 'Amount (INR)', widthMm: 26, align: 'right' },
+        ];
+        rows = filteredExpenses.map((e) => [
           e.expense_date,
           e.payee_name,
           e.bill_reference || '-',
@@ -336,37 +482,36 @@ export const ReportsScreen: React.FC = () => {
           `${e.payment_method} (${e.paid_from_account?.account_name || 'Account'})`,
           Number(e.amount).toFixed(2),
         ]);
-
-        autoTable(doc, {
-          startY: 38,
-          head: [['Date', 'Payee', 'Bill Ref', 'Category', 'Paid From', 'Amount (INR)']],
-          body: tableRows,
-          theme: 'striped',
-          headStyles: { fillColor: [15, 23, 42] },
-          styles: { fontSize: 8 },
-          foot: [['Total Expenses', '', '', '', '', Number(totalExpenseAmount).toFixed(2)]],
-          footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-        });
+        footerRow = ['Total Expenses', '', '', '', '', Number(totalExpenseAmount).toFixed(2)];
       } else if (reportType === 'category_expenses') {
-        const tableRows = expenseCategorySummary.map((c) => [
+        columns = [
+          { header: 'Expense Category', widthMm: 92, align: 'left' },
+          { header: 'Payments', widthMm: 28, align: 'right' },
+          { header: 'Share', widthMm: 28, align: 'right' },
+          { header: 'Total Amount (INR)', widthMm: 38, align: 'right' },
+        ];
+        rows = expenseCategorySummary.map((c) => [
           c.categoryName,
           String(c.entryCount),
           `${c.percentage.toFixed(1)}%`,
           Number(c.totalAmount).toFixed(2),
         ]);
-
-        autoTable(doc, {
-          startY: 38,
-          head: [['Expense Category', 'Payments', 'Share', 'Total Amount (INR)']],
-          body: tableRows,
-          theme: 'striped',
-          headStyles: { fillColor: [15, 23, 42] },
-          styles: { fontSize: 8 },
-          foot: [['Total Expenses', String(filteredExpenses.length), '100.0%', Number(totalExpenseAmount).toFixed(2)]],
-          footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-        });
+        footerRow = [
+          'Total Expenses',
+          String(filteredExpenses.length),
+          '100.0%',
+          Number(totalExpenseAmount).toFixed(2),
+        ];
       } else if (reportType === 'income_vs_expense') {
-        const tableRows = incomeVsExpenseMonthly.map((m) => [
+        columns = [
+          { header: 'Month', widthMm: 46, align: 'left' },
+          { header: 'Receipts', widthMm: 22, align: 'right' },
+          { header: 'Collections (INR)', widthMm: 34, align: 'right' },
+          { header: 'Payments', widthMm: 22, align: 'right' },
+          { header: 'Expenses (INR)', widthMm: 31, align: 'right' },
+          { header: 'Net Balance (INR)', widthMm: 31, align: 'right' },
+        ];
+        rows = incomeVsExpenseMonthly.map((m) => [
           m.fullLabel,
           String(m.donationCount),
           Number(m.collectionsAmount).toFixed(2),
@@ -374,26 +519,24 @@ export const ReportsScreen: React.FC = () => {
           Number(m.expensesAmount).toFixed(2),
           Number(m.netAmount).toFixed(2),
         ]);
-
-        autoTable(doc, {
-          startY: 38,
-          head: [['Month', 'Receipts', 'Collections (INR)', 'Payments', 'Expenses (INR)', 'Net Balance (INR)']],
-          body: tableRows,
-          theme: 'striped',
-          headStyles: { fillColor: [15, 23, 42] },
-          styles: { fontSize: 8 },
-          foot: [[
-            'FY Total',
-            String(fyDonations.length),
-            Number(totalFyCollections).toFixed(2),
-            String(fyExpenses.length),
-            Number(totalFyExpenses).toFixed(2),
-            Number(totalFyCollections - totalFyExpenses).toFixed(2),
-          ]],
-          footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-        });
+        footerRow = [
+          'FY Total',
+          String(fyDonations.length),
+          Number(totalFyCollections).toFixed(2),
+          String(fyExpenses.length),
+          Number(totalFyExpenses).toFixed(2),
+          Number(totalFyCollections - totalFyExpenses).toFixed(2),
+        ];
       } else {
-        const tableRows = filteredDonations.map((d) => [
+        columns = [
+          { header: 'Receipt #', widthMm: 33, align: 'left' },
+          { header: 'Date', widthMm: 22, align: 'left' },
+          { header: 'Member', widthMm: 48, align: 'left' },
+          { header: 'Category', widthMm: 36, align: 'left' },
+          { header: 'Method', widthMm: 22, align: 'left' },
+          { header: 'Amount (INR)', widthMm: 25, align: 'right' },
+        ];
+        rows = filteredDonations.map((d) => [
           d.receipt_number,
           d.donation_date,
           d.member?.full_name || 'Member',
@@ -401,33 +544,22 @@ export const ReportsScreen: React.FC = () => {
           d.payment_method,
           Number(d.amount).toFixed(2),
         ]);
-
-        autoTable(doc, {
-          startY: 38,
-          head: [['Receipt #', 'Date', 'Member', 'Category', 'Method', 'Amount (INR)']],
-          body: tableRows,
-          theme: 'striped',
-          headStyles: { fillColor: [15, 23, 42] },
-          styles: { fontSize: 8 },
-          foot: [['Total', '', '', '', '', Number(totalDonationAmount).toFixed(2)]],
-          footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-        });
-      }
-
-      const pageCount = (doc as unknown as { internal: { getNumberOfPages: () => number } }).internal.getNumberOfPages();
-      for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i);
-        doc.setFontSize(8);
-        doc.setTextColor(100, 116, 139);
-        doc.text(
-          `Page ${i} of ${pageCount} - Confidential Church Financial Record`,
-          14,
-          290
-        );
+        footerRow = ['Total', '', '', '', '', Number(totalDonationAmount).toFixed(2)];
       }
 
       const fileName = `${churchName.replace(/\s+/g, '_')}_${reportType}_${selectedFy}.pdf`;
-      doc.save(fileName);
+
+      await exportFinancialReportPdf({
+        churchName,
+        reportTitle: getReportTitle(reportType),
+        periodLabel: `${currentFyInfo.label} (${currentFyInfo.startDate} to ${currentFyInfo.endDate})`,
+        generatedAt: genDate,
+        columns,
+        rows,
+        footerRow,
+        fileName,
+      });
+
       setExportMessage(`Successfully generated PDF: ${fileName}`);
     } catch (err: unknown) {
       console.error('PDF export error:', err);
@@ -538,12 +670,16 @@ export const ReportsScreen: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={handleExportPDF}
+            onClick={() => void handleExportPDF()}
             disabled={isExporting || isLoading}
-            className="bg-sky-600 hover:bg-sky-500 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer whitespace-nowrap"
+            className="bg-sky-600 hover:bg-sky-500 disabled:opacity-60 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-sky-600/20 cursor-pointer whitespace-nowrap"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download PDF</span>
+            {isExporting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            <span>{isExporting ? 'Generating PDF...' : 'Download PDF'}</span>
           </button>
 
           {isStaff && (
@@ -551,7 +687,7 @@ export const ReportsScreen: React.FC = () => {
               type="button"
               onClick={handleExportExcel}
               disabled={isExporting || isLoading}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-emerald-600/20 cursor-pointer whitespace-nowrap"
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-semibold text-xs py-2 px-3.5 rounded-xl flex items-center gap-2 transition-colors shadow-lg shadow-emerald-600/20 cursor-pointer whitespace-nowrap"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>Export Excel (.xlsx)</span>
@@ -559,6 +695,14 @@ export const ReportsScreen: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Load error alert */}
+      {loadError && (
+        <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{loadError}</span>
+        </div>
+      )}
 
       {/* Export notification message */}
       {exportMessage && (

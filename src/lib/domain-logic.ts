@@ -2346,3 +2346,103 @@ export function validateBroadcastInput(params: {
   };
 }
 
+/**
+ * Constructs a canonical FinancialYearInfo object from an Indian Financial Year start year.
+ */
+export function buildFinancialYearInfo(startYear: number): FinancialYearInfo {
+  const endYear = startYear + 1;
+  const endShort = String(endYear).slice(-2);
+  return {
+    fyCode: `${startYear}-${endShort}`,
+    label: `FY ${startYear}–${endShort}`,
+    startDate: `${startYear}-04-01`,
+    endDate: `${endYear}-03-31`,
+    startYear,
+    endYear,
+  };
+}
+
+/**
+ * Merges standard recent financial years with any extra FYs discovered from church
+ * donation/expense dates or FY codes ("YYYY-YY"), sorted newest-first without duplicates.
+ */
+export function mergeFinancialYearOptions(
+  baseCount = 7,
+  recordDatesOrFyCodes: Array<string | null | undefined> = [],
+  referenceDate: Date = new Date()
+): FinancialYearInfo[] {
+  const byStartYear = new Map<number, FinancialYearInfo>();
+
+  const currentFy = getFinancialYear(referenceDate);
+  for (let i = 0; i < baseCount; i++) {
+    const startYear = currentFy.startYear - i;
+    byStartYear.set(startYear, buildFinancialYearInfo(startYear));
+  }
+
+  let minYear: number | null = null;
+  let maxYear: number | null = null;
+
+  for (const raw of recordDatesOrFyCodes) {
+    if (!raw || typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+
+    let discoveredStartYear: number | null = null;
+    const fyCodeMatch = trimmed.match(/^(\d{4})-(\d{2})$/);
+    if (fyCodeMatch) {
+      discoveredStartYear = parseInt(fyCodeMatch[1], 10);
+    } else if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+      const parsed = getFinancialYear(trimmed);
+      if (Number.isFinite(parsed.startYear)) {
+        discoveredStartYear = parsed.startYear;
+      }
+    }
+
+    if (
+      discoveredStartYear !== null &&
+      Number.isSafeInteger(discoveredStartYear) &&
+      discoveredStartYear >= 1970 &&
+      discoveredStartYear <= 2100
+    ) {
+      byStartYear.set(discoveredStartYear, buildFinancialYearInfo(discoveredStartYear));
+      if (minYear === null || discoveredStartYear < minYear) minYear = discoveredStartYear;
+      if (maxYear === null || discoveredStartYear > maxYear) maxYear = discoveredStartYear;
+    }
+  }
+
+  // Fill any intermediate years between earliest and latest discovered FY
+  if (minYear !== null && maxYear !== null) {
+    const rangeStart = Math.min(minYear, currentFy.startYear);
+    const rangeEnd = Math.max(maxYear, currentFy.startYear);
+    for (let yr = rangeStart; yr <= rangeEnd; yr++) {
+      if (!byStartYear.has(yr)) {
+        byStartYear.set(yr, buildFinancialYearInfo(yr));
+      }
+    }
+  }
+
+  return Array.from(byStartYear.values()).sort((a, b) => b.startYear - a.startYear);
+}
+
+/**
+ * Splits a string into user-perceived grapheme clusters so Indic scripts (like Gujarati
+ * consonant + vowel sign / virama conjuncts) are never split mid-glyph during line wrapping.
+ */
+export function splitIntoGraphemeClusters(text: string): string[] {
+  if (!text) return [];
+  const IntlWithSegmenter = Intl as typeof Intl & {
+    Segmenter?: new (
+      locales?: string | string[],
+      options?: { granularity?: 'grapheme' | 'word' | 'sentence' }
+    ) => { segment: (input: string) => Iterable<{ segment: string }> };
+  };
+
+  if (typeof IntlWithSegmenter.Segmenter === 'function') {
+    const segmenter = new IntlWithSegmenter.Segmenter('gu', { granularity: 'grapheme' });
+    return Array.from(segmenter.segment(text), (s) => s.segment);
+  }
+
+  return Array.from(text);
+}
+
+

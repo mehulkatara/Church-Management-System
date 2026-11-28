@@ -1,4 +1,7 @@
 import {createRoot} from 'react-dom/client';
+import '@fontsource/noto-sans-gujarati/400.css';
+import '@fontsource/noto-sans-gujarati/600.css';
+import '@fontsource/noto-sans-gujarati/700.css';
 import App from './App.tsx';
 import './index.css';
 
