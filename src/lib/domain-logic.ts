@@ -387,7 +387,8 @@ export type PermittedAction =
   | 'generate_bulk_reports' // Admin or Accountant only (Collector CANNOT)
   | 'view_all_church_donations' // Admin, Accountant, Collector
   | 'view_own_donations_only' // Member
-  | 'manage_member_share_links'; // Admin, Accountant, Collector
+  | 'manage_member_share_links' // Admin, Accountant, Collector
+  | 'send_broadcast_sms'; // Admin, Platform Admin, Accountant
 
 export function checkRolePermission(
   role: UserRole | 'none',
@@ -468,6 +469,11 @@ export function checkRolePermission(
       return role === 'platform_admin' || role === 'admin' || role === 'accountant' || role === 'collector'
         ? { allowed: true }
         : { allowed: false, reason: 'Only church staff can generate or revoke member links.' };
+
+    case 'send_broadcast_sms':
+      return role === 'platform_admin' || role === 'admin' || role === 'accountant'
+        ? { allowed: true }
+        : { allowed: false, reason: 'Only Accountants, Church Admins, and Platform Admins can send member broadcasts.' };
 
     default:
       return { allowed: false, reason: 'Action not permitted.' };
@@ -2066,5 +2072,277 @@ export function extractSupabaseErrorMessage(err: unknown, fallback: string): str
   }
 
   return fallback;
+}
+
+export interface BroadcastPlaceholderDef {
+  token: string;
+  label: string;
+  description: string;
+  sampleValue: string;
+}
+
+export const BROADCAST_PLACEHOLDERS: BroadcastPlaceholderDef[] = [
+  {
+    token: '{{full_name}}',
+    label: 'Full Name',
+    description: "Member's full name",
+    sampleValue: 'Samuel Rajan',
+  },
+  {
+    token: '{{first_name}}',
+    label: 'First Name',
+    description: "Member's first name",
+    sampleValue: 'Samuel',
+  },
+  {
+    token: '{{member_number}}',
+    label: 'Member ID',
+    description: 'Church-assigned Member ID',
+    sampleValue: 'BETHEL-1',
+  },
+  {
+    token: '{{village_name}}',
+    label: 'Village / City',
+    description: "Member's registered locality",
+    sampleValue: 'Tambaram',
+  },
+  {
+    token: '{{church_name}}',
+    label: 'Church Name',
+    description: 'Active church name',
+    sampleValue: 'Bethel Christian Assembly',
+  },
+];
+
+export interface BroadcastStarterTemplate {
+  id: string;
+  name: string;
+  title: string;
+  body: string;
+}
+
+export const BROADCAST_STARTER_TEMPLATES: BroadcastStarterTemplate[] = [
+  {
+    id: 'sunday_service',
+    name: 'Sunday Service Reminder',
+    title: 'Sunday Worship Service Reminder',
+    body: 'Dear {{first_name}} ({{member_number}}), warm greetings from {{church_name}}! We warmly invite you and your family in {{village_name}} for this Sunday Worship Service. God bless you!',
+  },
+  {
+    id: 'monthly_thanksgiving',
+    name: 'Thanksgiving / Special Offering',
+    title: 'Monthly Thanksgiving & Prayer Notice',
+    body: 'Greetings {{full_name}} ({{member_number}}), {{church_name}} invites you to join our upcoming Thanksgiving & Prayer gathering. Thank you for your faithful fellowship.',
+  },
+  {
+    id: 'member_update',
+    name: 'General Church Announcement',
+    title: 'Church Announcement',
+    body: 'Dear {{full_name}}, important update from {{church_name}}: [Type your announcement here]. Member ID: {{member_number}}.',
+  },
+];
+
+export interface BroadcastTemplateVars {
+  fullName: string | null | undefined;
+  memberNumber: string | null | undefined;
+  villageName: string | null | undefined;
+  churchName: string | null | undefined;
+}
+
+/**
+ * Renders user-specific broadcast SMS text from a template and member context.
+ * Supports {{full_name}}, {{first_name}}, {{member_number}}, {{village_name}}, {{church_name}}
+ * with optional whitespace inside braces and case-insensitive matching.
+ */
+export function renderBroadcastMessage(
+  template: string,
+  vars: BroadcastTemplateVars
+): string {
+  if (!template) return '';
+
+  const cleanFullName = (vars.fullName || '').trim().replace(/\s+/g, ' ') || 'Member';
+  const cleanFirstName = cleanFullName.split(' ')[0] || 'Member';
+  const cleanMemberNumber = (vars.memberNumber || '').trim() || '-';
+  const cleanVillage = (vars.villageName || '').trim() || 'your area';
+  const cleanChurch = (vars.churchName || '').trim() || 'Church';
+
+  const replacements: Record<string, string> = {
+    full_name: cleanFullName,
+    first_name: cleanFirstName,
+    member_number: cleanMemberNumber,
+    village_name: cleanVillage,
+    church_name: cleanChurch,
+  };
+
+  return template
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, rawKey: string) => {
+      const key = rawKey.toLowerCase();
+      return key in replacements ? replacements[key] : match;
+    })
+    .trim();
+}
+
+/**
+ * Estimates SMS character length and segment count (GSM-7 vs Unicode UCS-2).
+ */
+export function estimateSmsSegments(messageText: string): {
+  charCount: number;
+  isUnicode: boolean;
+  perSegmentLimit: number;
+  segments: number;
+} {
+  const text = messageText || '';
+  const charCount = text.length;
+  if (charCount === 0) {
+    return {
+      charCount: 0,
+      isUnicode: false,
+      perSegmentLimit: 160,
+      segments: 0,
+    };
+  }
+
+  // Standard GSM-7 basic character set + common extended ASCII punctuation/newlines
+  const isUnicode = /[^\u000A\u000D\u0020-\u007E]/.test(text);
+
+  if (isUnicode) {
+    const singleLimit = 70;
+    const multiLimit = 67;
+    const segments = charCount <= singleLimit ? 1 : Math.ceil(charCount / multiLimit);
+    return {
+      charCount,
+      isUnicode: true,
+      perSegmentLimit: segments === 1 ? singleLimit : multiLimit,
+      segments,
+    };
+  }
+
+  const singleLimit = 160;
+  const multiLimit = 153;
+  const segments = charCount <= singleLimit ? 1 : Math.ceil(charCount / multiLimit);
+  return {
+    charCount,
+    isUnicode: false,
+    perSegmentLimit: segments === 1 ? singleLimit : multiLimit,
+    segments,
+  };
+}
+
+export interface BroadcastMemberCandidate {
+  id: string;
+  full_name: string;
+  member_number: string;
+  contact_phone: string | null;
+  village_name: string | null;
+  membership_status: MembershipStatus;
+}
+
+/**
+ * Filters eligible active members for a broadcast by audience mode and computes
+ * phone-readiness counts. Inactive members are always excluded.
+ */
+export function filterBroadcastMembers<T extends BroadcastMemberCandidate>(params: {
+  members: T[];
+  mode: 'all_active' | 'village' | 'selected';
+  villageFilter?: string | null;
+  selectedMemberIds?: string[];
+  hasValidPhoneFn?: (rawPhone: string | null | undefined) => boolean;
+}): {
+  targetedMembers: T[];
+  readyMembers: T[];
+  missingPhoneMembers: T[];
+} {
+  const activeMembers = (params.members || []).filter(
+    (m) => m.membership_status === 'active'
+  );
+
+  let targetedMembers: T[];
+  if (params.mode === 'village') {
+    const targetVillage = (params.villageFilter || '').trim().toLowerCase();
+    targetedMembers = targetVillage
+      ? activeMembers.filter(
+          (m) => (m.village_name || '').trim().replace(/\s+/g, ' ').toLowerCase() === targetVillage
+        )
+      : [];
+  } else if (params.mode === 'selected') {
+    const selectedSet = new Set(params.selectedMemberIds || []);
+    targetedMembers = activeMembers.filter((m) => selectedSet.has(m.id));
+  } else {
+    targetedMembers = activeMembers;
+  }
+
+  const phoneValid =
+    params.hasValidPhoneFn ||
+    ((rawPhone: string | null | undefined) => Boolean(formatPhoneForSmsGateway(rawPhone)));
+
+  const readyMembers: T[] = [];
+  const missingPhoneMembers: T[] = [];
+
+  for (const m of targetedMembers) {
+    if (phoneValid(m.contact_phone)) {
+      readyMembers.push(m);
+    } else {
+      missingPhoneMembers.push(m);
+    }
+  }
+
+  return {
+    targetedMembers,
+    readyMembers,
+    missingPhoneMembers,
+  };
+}
+
+/**
+ * Validates broadcast message composition and audience readiness before dispatch.
+ */
+export function validateBroadcastInput(params: {
+  title?: string;
+  messageTemplate: string;
+  readyRecipientCount: number;
+}): {
+  valid: boolean;
+  error?: string;
+  normalizedTitle: string;
+  normalizedTemplate: string;
+} {
+  const normalizedTemplate = (params.messageTemplate || '').trim();
+  const normalizedTitle =
+    (params.title || '').trim().replace(/\s+/g, ' ') ||
+    normalizedTemplate.slice(0, 60) ||
+    'Member Broadcast';
+
+  if (!normalizedTemplate) {
+    return {
+      valid: false,
+      error: 'Please enter a message before broadcasting.',
+      normalizedTitle,
+      normalizedTemplate,
+    };
+  }
+
+  if (normalizedTemplate.length > 1600) {
+    return {
+      valid: false,
+      error: 'Broadcast message cannot exceed 1,600 characters.',
+      normalizedTitle,
+      normalizedTemplate,
+    };
+  }
+
+  if (params.readyRecipientCount <= 0) {
+    return {
+      valid: false,
+      error: 'At least 1 active member with a valid mobile number is required to send a broadcast.',
+      normalizedTitle,
+      normalizedTemplate,
+    };
+  }
+
+  return {
+    valid: true,
+    normalizedTitle,
+    normalizedTemplate,
+  };
 }
 

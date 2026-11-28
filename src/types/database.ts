@@ -243,6 +243,8 @@ export interface NotificationJob {
   id: string;
   church_id: string;
   donation_id: string | null;
+  broadcast_id?: string | null;
+  member_id?: string | null;
   recipient_phone: string;
   recipient_name: string;
   message_body: string;
@@ -254,6 +256,26 @@ export interface NotificationJob {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type BroadcastAudienceMode = 'all_active' | 'village' | 'selected';
+
+export interface BroadcastCampaign {
+  id: string;
+  church_id: string;
+  title: string;
+  message_template: string;
+  audience_filter: {
+    mode: BroadcastAudienceMode;
+    village?: string | null;
+    selected_count?: number;
+  } | null;
+  total_targeted: number;
+  sent_count: number;
+  failed_count: number;
+  skipped_no_phone_count: number;
+  created_by: string | null;
+  created_at: string;
 }
 
 export interface NotificationAttempt {

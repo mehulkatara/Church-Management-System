@@ -119,6 +119,37 @@ function formatReceiptSmsMessage(params: {
   return `Thank you, ${params.memberName}. ${params.churchName} has recorded your donation of INR ${formattedAmount} towards ${params.category} on ${params.donationDate}. Receipt: ${params.receiptNumber}.`;
 }
 
+function renderBroadcastTemplate(
+  template: string,
+  vars: {
+    fullName: string | null | undefined;
+    memberNumber: string | null | undefined;
+    villageName: string | null | undefined;
+    churchName: string | null | undefined;
+  }
+): string {
+  const cleanFullName = (vars.fullName || '').trim().replace(/\s+/g, ' ') || 'Member';
+  const cleanFirstName = cleanFullName.split(' ')[0] || 'Member';
+  const cleanMemberNumber = (vars.memberNumber || '').trim() || '-';
+  const cleanVillage = (vars.villageName || '').trim() || 'your area';
+  const cleanChurch = (vars.churchName || '').trim() || 'Church';
+
+  const replacements: Record<string, string> = {
+    full_name: cleanFullName,
+    first_name: cleanFirstName,
+    member_number: cleanMemberNumber,
+    village_name: cleanVillage,
+    church_name: cleanChurch,
+  };
+
+  return template
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, rawKey: string) => {
+      const key = rawKey.toLowerCase();
+      return key in replacements ? replacements[key] : match;
+    })
+    .trim();
+}
+
 function mapGatewayState(
   rawState: string | undefined
 ): 'submitted' | 'delivered' | 'failed' {
@@ -818,6 +849,307 @@ Deno.serve(async (req) => {
           message: dispatch.errorMessage || 'Test SMS failed.',
         });
       }
+    }
+
+    if (action === 'send_broadcast') {
+      const churchId = typeof body.churchId === 'string' ? body.churchId : '';
+      const rawTemplate = typeof body.messageTemplate === 'string' ? body.messageTemplate.trim() : '';
+      const rawTitle = typeof body.title === 'string' ? body.title.trim().replace(/\s+/g, ' ') : '';
+      const audienceMode =
+        body.audienceMode === 'village' || body.audienceMode === 'selected'
+          ? body.audienceMode
+          : 'all_active';
+      const villageFilter = typeof body.villageFilter === 'string' ? body.villageFilter.trim() : '';
+      const memberIds = Array.isArray(body.memberIds)
+        ? body.memberIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        : [];
+
+      if (!churchId || !rawTemplate) {
+        return jsonResponse(req, { error: 'churchId and messageTemplate are required.' }, 400);
+      }
+
+      if (rawTemplate.length > 1600) {
+        return jsonResponse(req, { error: 'Broadcast message cannot exceed 1,600 characters.' }, 400);
+      }
+
+      const { isPlatformAdmin, role } = await getCallerChurchRoles(serviceClient, user.id, churchId);
+      if (!isPlatformAdmin && !['admin', 'accountant'].includes(role || '')) {
+        return jsonResponse(
+          req,
+          { error: 'Only Accountants, Church Admins, and Platform Admins can send member broadcasts.' },
+          403
+        );
+      }
+
+      const { data: churchRow } = await serviceClient
+        .from('churches')
+        .select('id, name, is_active')
+        .eq('id', churchId)
+        .maybeSingle();
+
+      if (!churchRow || !churchRow.is_active) {
+        return jsonResponse(req, { error: 'Church not found or inactive.' }, 404);
+      }
+
+      const { data: gateway } = await serviceClient
+        .from('church_sms_gateways')
+        .select('*')
+        .eq('church_id', churchId)
+        .maybeSingle();
+
+      if (!gateway || !gateway.enabled || !gateway.username || !gateway.password) {
+        const msg = !gateway
+          ? 'Android SMS Gateway is not configured for this church yet. Configure it in Church Settings -> SMS Delivery.'
+          : 'Automatic SMS delivery is currently disabled in Church Settings.';
+        return jsonResponse(req, {
+          ok: false,
+          status: 'not_configured',
+          totalTargeted: 0,
+          sentCount: 0,
+          failedCount: 0,
+          skippedNoPhoneCount: 0,
+          message: msg,
+        });
+      }
+
+      let membersQuery = serviceClient
+        .from('members')
+        .select('id, full_name, member_number, contact_phone, village_name, membership_status')
+        .eq('church_id', churchId)
+        .eq('membership_status', 'active')
+        .order('full_name');
+
+      if (audienceMode === 'selected') {
+        if (memberIds.length === 0) {
+          return jsonResponse(req, { error: 'Please select at least one active member.' }, 400);
+        }
+        membersQuery = membersQuery.in('id', memberIds);
+      }
+
+      const { data: rawMembers, error: memErr } = await membersQuery;
+      if (memErr) {
+        throw new Error(memErr.message);
+      }
+
+      let matchedMembers = (rawMembers || []) as Array<{
+        id: string;
+        full_name: string;
+        member_number: string;
+        contact_phone: string | null;
+        village_name: string | null;
+        membership_status: string;
+      }>;
+
+      if (audienceMode === 'village') {
+        if (!villageFilter) {
+          return jsonResponse(req, { error: 'Please choose a Village / City to filter recipients.' }, 400);
+        }
+        const normalizedVillage = villageFilter.replace(/\s+/g, ' ').toLowerCase();
+        matchedMembers = matchedMembers.filter(
+          (m) => (m.village_name || '').trim().replace(/\s+/g, ' ').toLowerCase() === normalizedVillage
+        );
+      }
+
+      const readyRecipients: Array<{
+        member: (typeof matchedMembers)[number];
+        e164Phone: string;
+      }> = [];
+      let skippedNoPhoneCount = 0;
+
+      for (const m of matchedMembers) {
+        const e164Phone = formatPhoneToE164(m.contact_phone);
+        if (e164Phone) {
+          readyRecipients.push({ member: m, e164Phone });
+        } else {
+          skippedNoPhoneCount += 1;
+        }
+      }
+
+      if (readyRecipients.length === 0) {
+        return jsonResponse(
+          req,
+          {
+            ok: false,
+            status: 'failed',
+            totalTargeted: matchedMembers.length,
+            sentCount: 0,
+            failedCount: 0,
+            skippedNoPhoneCount,
+            message: 'None of the selected active members have a valid mobile number.',
+          },
+          400
+        );
+      }
+
+      const campaignTitle = rawTitle || rawTemplate.slice(0, 60) || 'Member Broadcast';
+      const { data: campaign, error: campErr } = await serviceClient
+        .from('broadcast_campaigns')
+        .insert({
+          church_id: churchId,
+          title: campaignTitle,
+          message_template: rawTemplate,
+          audience_filter: {
+            mode: audienceMode,
+            village: audienceMode === 'village' ? villageFilter : null,
+            selected_count: readyRecipients.length,
+          },
+          total_targeted: matchedMembers.length,
+          sent_count: 0,
+          failed_count: 0,
+          skipped_no_phone_count: skippedNoPhoneCount,
+          created_by: user.id,
+        })
+        .select('id')
+        .single();
+
+      if (campErr || !campaign) {
+        throw new Error(campErr?.message || 'Failed to create broadcast campaign record.');
+      }
+
+      let sentCount = 0;
+      let failedCount = 0;
+
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < readyRecipients.length; i += BATCH_SIZE) {
+        const chunk = readyRecipients.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(
+          chunk.map(async ({ member, e164Phone }) => {
+            const personalizedText = renderBroadcastTemplate(rawTemplate, {
+              fullName: member.full_name,
+              memberNumber: member.member_number,
+              villageName: member.village_name,
+              churchName: churchRow.name,
+            });
+
+            const { data: jobRow, error: jobErr } = await serviceClient
+              .from('notification_jobs')
+              .insert({
+                church_id: churchId,
+                donation_id: null,
+                broadcast_id: campaign.id,
+                member_id: member.id,
+                recipient_phone: e164Phone,
+                recipient_name: member.full_name,
+                message_body: personalizedText,
+                status: 'queued',
+                provider: 'android_sms_gateway',
+                attempts_count: 0,
+              })
+              .select('id')
+              .single();
+
+            if (jobErr || !jobRow) {
+              return false;
+            }
+
+            const nowIso = new Date().toISOString();
+            const dispatch = await sendViaAndroidSmsGateway({
+              gateway: gateway as GatewayRecord,
+              jobId: jobRow.id,
+              recipientPhone: e164Phone,
+              messageBody: personalizedText,
+            });
+
+            if (dispatch.ok) {
+              const mappedStatus = mapGatewayState(dispatch.gatewayState || undefined);
+              await serviceClient
+                .from('notification_jobs')
+                .update({
+                  status: mappedStatus,
+                  external_id: dispatch.externalId,
+                  attempts_count: 1,
+                  last_attempt_at: nowIso,
+                  error_message: null,
+                  updated_at: nowIso,
+                })
+                .eq('id', jobRow.id);
+
+              await serviceClient.from('notification_attempts').insert({
+                job_id: jobRow.id,
+                attempt_number: 1,
+                status: mappedStatus,
+                response_payload: dispatch.responseBody,
+              });
+              return true;
+            } else {
+              await serviceClient
+                .from('notification_jobs')
+                .update({
+                  status: 'failed',
+                  attempts_count: 1,
+                  last_attempt_at: nowIso,
+                  error_message: dispatch.errorMessage,
+                  updated_at: nowIso,
+                })
+                .eq('id', jobRow.id);
+
+              await serviceClient.from('notification_attempts').insert({
+                job_id: jobRow.id,
+                attempt_number: 1,
+                status: 'failed',
+                response_payload: dispatch.responseBody,
+                error_message: dispatch.errorMessage,
+              });
+              return false;
+            }
+          })
+        );
+
+        for (const ok of results) {
+          if (ok) sentCount += 1;
+          else failedCount += 1;
+        }
+      }
+
+      await serviceClient
+        .from('broadcast_campaigns')
+        .update({
+          sent_count: sentCount,
+          failed_count: failedCount,
+          skipped_no_phone_count: skippedNoPhoneCount,
+        })
+        .eq('id', campaign.id);
+
+      await serviceClient.from('audit_logs').insert({
+        church_id: churchId,
+        actor_user_id: user.id,
+        action: 'broadcast.sent',
+        entity_type: 'broadcast_campaign',
+        entity_id: campaign.id,
+        change_summary: `Broadcast "${campaignTitle}" dispatched to ${sentCount}/${readyRecipients.length} member phone(s) (${failedCount} failed, ${skippedNoPhoneCount} skipped without phone)`,
+        new_state: {
+          title: campaignTitle,
+          audience_mode: audienceMode,
+          village_filter: audienceMode === 'village' ? villageFilter : null,
+          total_targeted: matchedMembers.length,
+          sent_count: sentCount,
+          failed_count: failedCount,
+          skipped_no_phone_count: skippedNoPhoneCount,
+        },
+      });
+
+      const finalStatus =
+        sentCount === readyRecipients.length
+          ? 'completed'
+          : sentCount > 0
+          ? 'partial'
+          : 'failed';
+
+      return jsonResponse(req, {
+        ok: sentCount > 0,
+        status: finalStatus,
+        campaignId: campaign.id,
+        totalTargeted: matchedMembers.length,
+        sentCount,
+        failedCount,
+        skippedNoPhoneCount,
+        message:
+          sentCount > 0
+            ? `Broadcast submitted to ${sentCount} of ${readyRecipients.length} member phone(s).${
+                failedCount > 0 ? ` ${failedCount} failed (retryable in SMS Confirmations).` : ''
+              }`
+            : `Broadcast failed for all ${failedCount} recipient(s). Check gateway status and retry in SMS Confirmations.`,
+      });
     }
 
     return jsonResponse(req, { error: 'Unsupported action.' }, 400);

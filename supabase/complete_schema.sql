@@ -480,6 +480,30 @@ CREATE INDEX IF NOT EXISTS idx_expense_revisions_expense
 CREATE INDEX IF NOT EXISTS idx_expense_revisions_church
     ON public.expense_revisions(church_id, created_at DESC);
 
+-- 24. BROADCAST CAMPAIGNS (Church-scoped bulk member SMS broadcasts)
+CREATE TABLE IF NOT EXISTS public.broadcast_campaigns (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    church_id UUID NOT NULL REFERENCES public.churches(id) ON DELETE CASCADE,
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    message_template TEXT NOT NULL CHECK (length(trim(message_template)) > 0),
+    audience_filter JSONB,
+    total_targeted INT NOT NULL DEFAULT 0,
+    sent_count INT NOT NULL DEFAULT 0,
+    failed_count INT NOT NULL DEFAULT 0,
+    skipped_no_phone_count INT NOT NULL DEFAULT 0,
+    created_by UUID REFERENCES auth.users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+);
+CREATE INDEX IF NOT EXISTS idx_broadcast_campaigns_church
+    ON public.broadcast_campaigns(church_id, created_at DESC);
+
+ALTER TABLE public.notification_jobs
+    ADD COLUMN IF NOT EXISTS broadcast_id UUID REFERENCES public.broadcast_campaigns(id) ON DELETE SET NULL;
+ALTER TABLE public.notification_jobs
+    ADD COLUMN IF NOT EXISTS member_id UUID REFERENCES public.members(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_notification_jobs_broadcast
+    ON public.notification_jobs(broadcast_id) WHERE broadcast_id IS NOT NULL;
+
 -- ==============================================================================
 -- SECTION 2: AUTH USER PROFILE TRIGGER
 -- Automatically creates a public.profiles row whenever an auth.users account is created
@@ -798,6 +822,7 @@ ALTER TABLE public.church_sms_gateways ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expense_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.expense_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.broadcast_campaigns ENABLE ROW LEVEL SECURITY;
 
 -- ==============================================================================
 -- SECTION 4: SECURITY HELPER FUNCTIONS
@@ -1176,6 +1201,17 @@ CREATE POLICY "Church admins and accountants can view expense revisions"
 
 GRANT SELECT ON public.expenses TO authenticated;
 GRANT SELECT ON public.expense_revisions TO authenticated;
+
+-- 20. BROADCAST CAMPAIGNS RLS (Readable by Admin & Accountant; writes strictly via server-side Edge Function)
+DROP POLICY IF EXISTS "Church admins and accountants can view broadcast campaigns" ON public.broadcast_campaigns;
+CREATE POLICY "Church admins and accountants can view broadcast campaigns"
+    ON public.broadcast_campaigns FOR SELECT
+    USING (
+        public.is_platform_admin(auth.uid())
+        OR public.get_auth_church_role(church_id, auth.uid()) IN ('admin', 'accountant')
+    );
+
+GRANT SELECT ON public.broadcast_campaigns TO authenticated;
 
 -- ==============================================================================
 -- SECTION 6: ATOMIC BUSINESS & SECURITY DEFINER RPCS

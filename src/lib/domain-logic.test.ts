@@ -30,6 +30,10 @@ import {
   validateReceivingAccountInput,
   extractSupabaseErrorMessage,
   canSwitchActiveChurch,
+  renderBroadcastMessage,
+  estimateSmsSegments,
+  filterBroadcastMembers,
+  validateBroadcastInput,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -1036,4 +1040,141 @@ test('Only Platform Admin can switch active churches; all other roles are blocke
   assert.equal(canSwitchActiveChurch('collector', false), false);
   assert.equal(canSwitchActiveChurch('member', false), false);
   assert.equal(canSwitchActiveChurch('none', false), false);
+});
+
+test('Member SMS broadcast permission allows Accountant, Church Admin, and Platform Admin only', () => {
+  assert.equal(checkRolePermission('accountant', 'send_broadcast_sms').allowed, true);
+  assert.equal(checkRolePermission('admin', 'send_broadcast_sms').allowed, true);
+  assert.equal(checkRolePermission('platform_admin', 'send_broadcast_sms').allowed, true);
+
+  assert.equal(checkRolePermission('collector', 'send_broadcast_sms').allowed, false);
+  assert.equal(checkRolePermission('member', 'send_broadcast_sms').allowed, false);
+  assert.equal(checkRolePermission('none', 'send_broadcast_sms').allowed, false);
+});
+
+test('renderBroadcastMessage substitutes all user-specific placeholders case-insensitively with clean fallbacks', () => {
+  const rendered = renderBroadcastMessage(
+    'Dear {{ first_name }} ({{MEMBER_NUMBER}}), welcome {{full_name}} from {{village_name}} to {{church_name}}!',
+    {
+      fullName: '  Samuel   Rajan ',
+      memberNumber: 'BETHEL-12',
+      villageName: 'Tambaram',
+      churchName: 'Bethel Christian Assembly',
+    }
+  );
+
+  assert.equal(
+    rendered,
+    'Dear Samuel (BETHEL-12), welcome Samuel Rajan from Tambaram to Bethel Christian Assembly!'
+  );
+
+  const fallbackRendered = renderBroadcastMessage('Hi {{first_name}} in {{village_name}}', {
+    fullName: '',
+    memberNumber: null,
+    villageName: null,
+    churchName: null,
+  });
+  assert.equal(fallbackRendered, 'Hi Member in your area');
+});
+
+test('filterBroadcastMembers excludes inactive members, separates missing phone numbers, and filters by village or selection', () => {
+  const members = [
+    {
+      id: 'm1',
+      full_name: 'Samuel Rajan',
+      member_number: 'BETHEL-1',
+      contact_phone: '9840123456',
+      village_name: 'Tambaram',
+      membership_status: 'active' as const,
+    },
+    {
+      id: 'm2',
+      full_name: 'Mary Grace',
+      member_number: 'BETHEL-2',
+      contact_phone: null,
+      village_name: 'Tambaram',
+      membership_status: 'active' as const,
+    },
+    {
+      id: 'm3',
+      full_name: 'Stephen Paul',
+      member_number: 'BETHEL-3',
+      contact_phone: '+91 98409 99999',
+      village_name: 'Kallakurichi',
+      membership_status: 'active' as const,
+    },
+    {
+      id: 'm4',
+      full_name: 'Inactive User',
+      member_number: 'BETHEL-4',
+      contact_phone: '9884111222',
+      village_name: 'Tambaram',
+      membership_status: 'inactive' as const,
+    },
+  ];
+
+  const allRes = filterBroadcastMembers({ members, mode: 'all_active' });
+  assert.equal(allRes.targetedMembers.length, 3);
+  assert.deepEqual(
+    allRes.readyMembers.map((m) => m.id),
+    ['m1', 'm3']
+  );
+  assert.deepEqual(
+    allRes.missingPhoneMembers.map((m) => m.id),
+    ['m2']
+  );
+
+  const villageRes = filterBroadcastMembers({
+    members,
+    mode: 'village',
+    villageFilter: ' tambaram ',
+  });
+  assert.deepEqual(
+    villageRes.targetedMembers.map((m) => m.id),
+    ['m1', 'm2']
+  );
+  assert.deepEqual(
+    villageRes.readyMembers.map((m) => m.id),
+    ['m1']
+  );
+
+  const selectedRes = filterBroadcastMembers({
+    members,
+    mode: 'selected',
+    selectedMemberIds: ['m3', 'm4'],
+  });
+  assert.deepEqual(
+    selectedRes.readyMembers.map((m) => m.id),
+    ['m3']
+  );
+});
+
+test('estimateSmsSegments and validateBroadcastInput compute GSM/Unicode limits and enforce required inputs', () => {
+  const gsm1 = estimateSmsSegments('Hello church members!');
+  assert.equal(gsm1.isUnicode, false);
+  assert.equal(gsm1.segments, 1);
+
+  const gsm2 = estimateSmsSegments('A'.repeat(161));
+  assert.equal(gsm2.isUnicode, false);
+  assert.equal(gsm2.segments, 2);
+
+  const unicodeMsg = estimateSmsSegments('வணக்கம் {{full_name}} '.repeat(5));
+  assert.equal(unicodeMsg.isUnicode, true);
+  assert.equal(unicodeMsg.segments, 2);
+
+  assert.equal(
+    validateBroadcastInput({ messageTemplate: '   ', readyRecipientCount: 3 }).valid,
+    false
+  );
+  assert.equal(
+    validateBroadcastInput({ messageTemplate: 'Hello', readyRecipientCount: 0 }).valid,
+    false
+  );
+  const ok = validateBroadcastInput({
+    title: '  ',
+    messageTemplate: 'Dear {{first_name}}, join Sunday service.',
+    readyRecipientCount: 2,
+  });
+  assert.equal(ok.valid, true);
+  assert.equal(ok.normalizedTitle, 'Dear {{first_name}}, join Sunday service.');
 });

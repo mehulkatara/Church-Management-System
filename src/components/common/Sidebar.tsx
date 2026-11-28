@@ -16,6 +16,7 @@ import {
   Settings,
   User,
   Wallet,
+  Megaphone,
 } from 'lucide-react';
 
 export type ScreenId =
@@ -28,8 +29,9 @@ export type ScreenId =
   | 'categories'
   | 'reports'
   | 'leaderboard'
-  | 'audit'
+  | 'broadcast'
   | 'notifications'
+  | 'audit'
   | 'churches'
   | 'staff'
   | 'profile'
@@ -160,6 +162,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span>Leaderboard</span>
           </div>
         </button>
+
+        {/* Member Broadcast (Admin & Accountant) */}
+        {isAccountantOrAdmin && (
+          <button onClick={() => handleNav('broadcast')} className={navItemClass('broadcast')}>
+            <div className="flex items-center gap-2.5">
+              <Megaphone className="w-4 h-4" />
+              <span>Member Broadcast</span>
+            </div>
+          </button>
+        )}
 
         {/* SMS / Notifications */}
         {isStaff && (

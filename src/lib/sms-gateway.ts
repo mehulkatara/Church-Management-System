@@ -248,3 +248,71 @@ export async function sendTestSms(params: {
     message: data?.message || 'Test SMS processed.',
   };
 }
+
+export interface BroadcastDispatchResponse {
+  ok: boolean;
+  status: 'completed' | 'partial' | 'failed' | 'not_configured';
+  campaignId?: string;
+  totalTargeted: number;
+  sentCount: number;
+  failedCount: number;
+  skippedNoPhoneCount: number;
+  message: string;
+}
+
+export async function sendMemberBroadcastSms(params: {
+  churchId: string;
+  title: string;
+  messageTemplate: string;
+  audienceMode: 'all_active' | 'village' | 'selected';
+  villageFilter?: string | null;
+  memberIds?: string[];
+}): Promise<BroadcastDispatchResponse> {
+  if (!supabase) {
+    return {
+      ok: false,
+      status: 'not_configured',
+      totalTargeted: 0,
+      sentCount: 0,
+      failedCount: 0,
+      skippedNoPhoneCount: 0,
+      message: 'Preview mode active: live SMS broadcast requires a Supabase connection.',
+    };
+  }
+
+  const { data, error } = await supabase.functions.invoke('sms-gateway-dispatch', {
+    body: {
+      action: 'send_broadcast',
+      churchId: params.churchId,
+      title: params.title,
+      messageTemplate: params.messageTemplate,
+      audienceMode: params.audienceMode,
+      villageFilter: params.villageFilter ?? null,
+      memberIds: params.memberIds ?? [],
+    },
+  });
+
+  if (error) {
+    const errMsg = await extractFunctionError(error);
+    return {
+      ok: false,
+      status: 'failed',
+      totalTargeted: 0,
+      sentCount: 0,
+      failedCount: 0,
+      skippedNoPhoneCount: 0,
+      message: errMsg,
+    };
+  }
+
+  return {
+    ok: Boolean(data?.ok),
+    status: data?.status || (data?.ok ? 'completed' : 'failed'),
+    campaignId: data?.campaignId,
+    totalTargeted: Number(data?.totalTargeted || 0),
+    sentCount: Number(data?.sentCount || 0),
+    failedCount: Number(data?.failedCount || 0),
+    skippedNoPhoneCount: Number(data?.skippedNoPhoneCount || 0),
+    message: data?.message || 'Broadcast processed.',
+  };
+}

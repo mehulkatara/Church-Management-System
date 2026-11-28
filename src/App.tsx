@@ -18,6 +18,7 @@ import { CategoriesScreen } from './components/screens/CategoriesScreen';
 import { ReportsScreen } from './components/screens/ReportsScreen';
 import { LeaderboardScreen } from './components/screens/LeaderboardScreen';
 import { AuditHistoryScreen } from './components/screens/AuditHistoryScreen';
+import { BroadcastScreen } from './components/screens/BroadcastScreen';
 import { NotificationStatusScreen } from './components/screens/NotificationStatusScreen';
 import { ChurchManagementScreen } from './components/screens/ChurchManagementScreen';
 import { StaffManagementScreen } from './components/screens/StaffManagementScreen';
@@ -135,6 +136,8 @@ const MainAppContent: React.FC<{
         return <LeaderboardScreen />;
       case 'audit':
         return <AuditHistoryScreen />;
+      case 'broadcast':
+        return <BroadcastScreen onNavigate={setCurrentScreen} />;
       case 'notifications':
         return <NotificationStatusScreen />;
       case 'churches':
@@ -177,6 +180,7 @@ const MainAppContent: React.FC<{
               <option value="categories">Categories &amp; Accounts</option>
               <option value="reports">Financial Reports</option>
               <option value="leaderboard">Leaderboard</option>
+              <option value="broadcast">Member Broadcast</option>
               <option value="notifications">SMS Confirmations</option>
               <option value="audit">Audit History</option>
               <option value="churches">Churches</option>
