@@ -1,14 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  GOOGLE_PEOPLE_SCOPES,
+  PEOPLE_API_ENDPOINT,
   parseGooglePeopleResponse,
   extractNameFromPeople,
   extractDateOfBirthFromPeople,
   extractVillageOrCityFromPeople,
   extractGenderFromPeople,
+  extractPhoneNumberFromPeople,
 } from './google-people';
 
-test('Google People API parser extracts name, DOB, village/city, and gender from primary entries', () => {
+test('Google People API scopes and endpoint include phoneNumbers', () => {
+  assert.ok(
+    GOOGLE_PEOPLE_SCOPES.includes('https://www.googleapis.com/auth/user.phonenumbers.read')
+  );
+  assert.ok(PEOPLE_API_ENDPOINT.includes('phoneNumbers'));
+});
+
+test('Google People API parser extracts name, DOB, village/city, gender, and phone from primary entries', () => {
   const result = parseGooglePeopleResponse({
     names: [
       { metadata: { primary: false }, displayName: 'Alias Name' },
@@ -27,17 +37,27 @@ test('Google People API parser extracts name, DOB, village/city, and gender from
       },
     ],
     genders: [{ metadata: { primary: true }, value: 'male' }],
+    phoneNumbers: [
+      {
+        metadata: { primary: true },
+        value: '+91 98401 23456',
+        canonicalForm: '+919840123456',
+        type: 'mobile',
+      },
+    ],
   });
 
   assert.equal(result.fullName, 'Samuel Rajan');
   assert.equal(result.dateOfBirth, '1994-06-05');
   assert.equal(result.villageOrCity, 'Tambaram');
   assert.equal(result.gender, 'male');
+  assert.equal(result.phoneNumber, '9840123456');
   assert.deepEqual(result.importedFields, [
     'Full Name',
     'Date of Birth',
     'Village / City Name',
     'Gender',
+    'Phone Number',
   ]);
   assert.deepEqual(result.missingFields, []);
 });
@@ -79,4 +99,23 @@ test('Google People API gender and name fallback mapping works cleanly', () => {
     extractNameFromPeople([{ givenName: 'Mary', familyName: 'Joseph' }]),
     'Mary Joseph'
   );
+});
+
+test('Google People API phone extractor normalizes Indian mobile numbers and ignores foreign ones', () => {
+  assert.equal(
+    extractPhoneNumberFromPeople([{ value: '098401-23456' }]),
+    '9840123456'
+  );
+  assert.equal(
+    extractPhoneNumberFromPeople([
+      { metadata: { primary: true }, canonicalForm: '+16505550100', type: 'work' },
+      { metadata: { primary: false }, canonicalForm: '+919876543210', type: 'mobile' },
+    ]),
+    '9876543210'
+  );
+  assert.equal(
+    extractPhoneNumberFromPeople([{ canonicalForm: '+6591234567' }]),
+    null
+  );
+  assert.equal(extractPhoneNumberFromPeople([]), null);
 });

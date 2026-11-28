@@ -336,12 +336,13 @@ export const PrivacyPolicyPage: React.FC<PublicPageProps> = ({ onNavigate, isAut
               <li>
                 <strong>Google People API Profile Fields (Read-Only, With Consent):</strong> Full
                 name (<code>userinfo.profile</code>), Date of Birth (<code>user.birthday.read</code>
-                ), Village / City from your address (<code>user.addresses.read</code>), and Gender (
-                <code>user.gender.read</code>) to pre-fill your new member application.
+                ), Village / City from your address (<code>user.addresses.read</code>), Gender (
+                <code>user.gender.read</code>), and Phone Number (<code>user.phonenumbers.read</code>)
+                to pre-fill your new member application.
               </li>
               <li>
-                <strong>Manually Provided Details:</strong> Contact phone number, selected church,
-                optional separate contact email, and any manual edits you make to your onboarding
+                <strong>Manually Provided Details:</strong> Selected church, optional separate
+                contact email, and any manual edits or missing fields you enter on your onboarding
                 or member profile.
               </li>
               <li>

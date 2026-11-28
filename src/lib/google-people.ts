@@ -1,9 +1,13 @@
 import type { Gender } from '../types/database';
-import { validateDateOfBirth } from './domain-logic';
+import {
+  validateDateOfBirth,
+  formatIndianMobileInput,
+  normalizePhoneNumber,
+} from './domain-logic';
 
 /**
  * Minimum Google OAuth scopes required to read the user's identity,
- * full name, date of birth, addresses (village/city), and gender
+ * full name, date of birth, addresses (village/city), gender, and phone number
  * from Google People API during onboarding.
  */
 export const GOOGLE_PEOPLE_SCOPES = [
@@ -12,10 +16,11 @@ export const GOOGLE_PEOPLE_SCOPES = [
   'https://www.googleapis.com/auth/user.birthday.read',
   'https://www.googleapis.com/auth/user.addresses.read',
   'https://www.googleapis.com/auth/user.gender.read',
+  'https://www.googleapis.com/auth/user.phonenumbers.read',
 ] as const;
 
 export const PEOPLE_API_ENDPOINT =
-  'https://people.googleapis.com/v1/people/me?personFields=names,birthdays,addresses,genders';
+  'https://people.googleapis.com/v1/people/me?personFields=names,birthdays,addresses,genders,phoneNumbers';
 
 export interface GooglePeopleRawName {
   metadata?: { primary?: boolean };
@@ -53,11 +58,19 @@ export interface GooglePeopleRawGender {
   formattedValue?: string;
 }
 
+export interface GooglePeopleRawPhoneNumber {
+  metadata?: { primary?: boolean };
+  value?: string;
+  canonicalForm?: string;
+  type?: string;
+}
+
 export interface GooglePeopleRawResponse {
   names?: GooglePeopleRawName[];
   birthdays?: GooglePeopleRawBirthday[];
   addresses?: GooglePeopleRawAddress[];
   genders?: GooglePeopleRawGender[];
+  phoneNumbers?: GooglePeopleRawPhoneNumber[];
 }
 
 export interface GooglePeopleProfile {
@@ -65,6 +78,7 @@ export interface GooglePeopleProfile {
   dateOfBirth: string | null; // YYYY-MM-DD
   villageOrCity: string | null;
   gender: Gender | null;
+  phoneNumber: string | null; // 10-digit Indian mobile number
   importedFields: string[];
   missingFields: string[];
 }
@@ -185,6 +199,54 @@ export function extractGenderFromPeople(
 }
 
 /**
+ * Extracts a normalized 10-digit Indian mobile number from a raw phone string
+ * (rejecting non-Indian international country codes).
+ */
+export function normalizeIndianPhoneCandidate(
+  rawPhone?: string | null
+): string | null {
+  if (!rawPhone || typeof rawPhone !== 'string') return null;
+  const compact = rawPhone.trim().replace(/[\s\-()]/g, '');
+  if (!compact) return null;
+  if (compact.startsWith('+') && !compact.startsWith('+91')) {
+    return null;
+  }
+
+  const formatted = formatIndianMobileInput(compact);
+  const check = normalizePhoneNumber(formatted);
+  return check.valid ? check.normalized : null;
+}
+
+/**
+ * Extracts a 10-digit Indian mobile number from Google People API `phoneNumbers`.
+ * Prioritizes primary entries, then mobile entries, then remaining phone entries.
+ */
+export function extractPhoneNumberFromPeople(
+  phoneNumbers?: GooglePeopleRawPhoneNumber[]
+): string | null {
+  if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) return null;
+
+  const primary = pickPrimaryOrFirst(phoneNumbers);
+  const ordered = primary
+    ? [
+        primary,
+        ...phoneNumbers.filter((p) => p !== primary && p.type?.toLowerCase() === 'mobile'),
+        ...phoneNumbers.filter((p) => p !== primary && p.type?.toLowerCase() !== 'mobile'),
+      ]
+    : phoneNumbers;
+
+  for (const entry of ordered) {
+    const candidates = [entry.canonicalForm, entry.value];
+    for (const candidate of candidates) {
+      const normalized = normalizeIndianPhoneCandidate(candidate);
+      if (normalized) return normalized;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parses a raw Google People API response into onboarding form values.
  */
 export function parseGooglePeopleResponse(
@@ -194,6 +256,7 @@ export function parseGooglePeopleResponse(
   const dateOfBirth = extractDateOfBirthFromPeople(data.birthdays);
   const villageOrCity = extractVillageOrCityFromPeople(data.addresses);
   const gender = extractGenderFromPeople(data.genders);
+  const phoneNumber = extractPhoneNumberFromPeople(data.phoneNumbers);
 
   const importedFields: string[] = [];
   const missingFields: string[] = [];
@@ -210,11 +273,15 @@ export function parseGooglePeopleResponse(
   if (gender) importedFields.push('Gender');
   else missingFields.push('Gender');
 
+  if (phoneNumber) importedFields.push('Phone Number');
+  else missingFields.push('Phone Number');
+
   return {
     fullName,
     dateOfBirth,
     villageOrCity,
     gender,
+    phoneNumber,
     importedFields,
     missingFields,
   };
@@ -250,14 +317,10 @@ export async function fetchGooglePeopleProfile(
     }
 
     if (res.status === 401) {
-      throw new Error(
-        'Your Google access token has expired. Click "Reconnect Google" to refresh permissions and import your profile.'
-      );
+      throw new Error('Your Google access token has expired.');
     }
     if (res.status === 403) {
-      throw new Error(
-        `Google People API access was denied (${apiMessage}). Please reconnect with Google and approve Birthday, Address, and Gender permissions.`
-      );
+      throw new Error(`Google People API access was denied (${apiMessage}).`);
     }
     throw new Error(apiMessage);
   }

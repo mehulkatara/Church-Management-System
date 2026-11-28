@@ -6,17 +6,17 @@ import {
   validateOnboardingProfile,
   normalizePhoneNumber,
   formatIndianMobileInput,
-  buildChurchPortalUrl,
+  buildVillageSuggestions,
+  validateDateOfBirth,
+  validateGender,
   GENDER_LABELS,
 } from '../../lib/domain-logic';
-import {
-  getPreviewChurches,
-  persistScopedChurchSlug,
-} from '../../lib/church-slug';
+import { getPreviewChurches } from '../../lib/church-slug';
 import {
   fetchGooglePeopleProfile,
-  GOOGLE_PEOPLE_SCOPES,
+  normalizeIndianPhoneCandidate,
 } from '../../lib/google-people';
+import { VillageCityInput } from '../common/VillageCityInput';
 import {
   ShieldCheck,
   CheckCircle2,
@@ -26,11 +26,9 @@ import {
   Phone,
   Mail,
   User,
-  MapPin,
   Save,
   Send,
   LogOut,
-  Sparkles,
   Info,
   AlertTriangle,
   Lock,
@@ -55,15 +53,13 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
   const [gender, setGender] = useState<Gender | ''>('');
   const [villageName, setVillageName] = useState<string>('');
 
+  const [villageOptions, setVillageOptions] = useState<string[]>([]);
   const [isLoadingChurches, setIsLoadingChurches] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [isSavingDraft, setIsSavingDraft] = useState<boolean>(false);
-  const [isImportingGoogle, setIsImportingGoogle] = useState<boolean>(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submissionSuccess, setSubmissionSuccess] = useState<string | null>(null);
   const [draftSavedMessage, setDraftSavedMessage] = useState<string | null>(null);
-  const [googleImportNotice, setGoogleImportNotice] = useState<string | null>(null);
-  const [googleImportSuccess, setGoogleImportSuccess] = useState<string | null>(null);
   const autoImportedTokenRef = useRef<string | null>(null);
 
   // Trusted Google email directly from auth (read-only)
@@ -130,126 +126,174 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
       if (existingRequest.applicant_phone) {
         setPhoneNumber(formatIndianMobileInput(existingRequest.applicant_phone));
       }
-    } else {
-      // Prefill full name from Google metadata
-      const googleName =
-        user?.user_metadata?.full_name ||
-        user?.user_metadata?.name ||
-        profile?.full_name ||
-        '';
-      if (googleName && !fullName) {
-        setFullName(googleName);
-      }
+      return;
+    }
+
+    // Default auto-fill from authenticated Google identity metadata & profile
+    const googleName =
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      profile?.full_name ||
+      '';
+    if (googleName) {
+      setFullName((prev) => (prev.trim() ? prev : googleName));
+    }
+
+    const metadataPhone =
+      normalizeIndianPhoneCandidate(profile?.phone) ||
+      normalizeIndianPhoneCandidate(user?.phone) ||
+      normalizeIndianPhoneCandidate(
+        typeof user?.user_metadata?.phone === 'string' ? user.user_metadata.phone : null
+      );
+    if (metadataPhone) {
+      setPhoneNumber((prev) => (prev.trim() ? prev : metadataPhone));
+    }
+
+    const rawMetaDob =
+      typeof user?.user_metadata?.date_of_birth === 'string'
+        ? user.user_metadata.date_of_birth
+        : typeof user?.user_metadata?.birthday === 'string'
+        ? user.user_metadata.birthday
+        : '';
+    if (rawMetaDob && validateDateOfBirth(rawMetaDob).valid) {
+      setDateOfBirth((prev) => prev || rawMetaDob);
+    }
+
+    const rawMetaGender =
+      typeof user?.user_metadata?.gender === 'string'
+        ? validateGender(user.user_metadata.gender)
+        : null;
+    if (rawMetaGender) {
+      setGender((prev) => prev || rawMetaGender);
     }
   }, [existingRequest, user, profile, scopedChurch]);
 
-  const runPeopleApiImport = async (token: string, onlyFillEmpty: boolean) => {
-    setIsImportingGoogle(true);
-    setGoogleImportNotice(null);
-    setGoogleImportSuccess(null);
-
-    try {
-      const peopleData = await fetchGooglePeopleProfile(token);
-      const applied: string[] = [];
-
-      if (peopleData.fullName && (!onlyFillEmpty || !fullName.trim())) {
-        setFullName(peopleData.fullName);
-        applied.push('Full Name');
-      }
-      if (peopleData.dateOfBirth && (!onlyFillEmpty || !dateOfBirth)) {
-        setDateOfBirth(peopleData.dateOfBirth);
-        applied.push('Date of Birth');
-      }
-      if (peopleData.villageOrCity && (!onlyFillEmpty || !villageName.trim())) {
-        setVillageName(peopleData.villageOrCity);
-        applied.push('Village / City Name');
-      }
-      if (peopleData.gender && (!onlyFillEmpty || !gender)) {
-        setGender(peopleData.gender);
-        applied.push('Gender');
-      }
-
-      if (applied.length > 0) {
-        setGoogleImportSuccess(
-          `Imported from Google People API: ${applied.join(', ')}.${
-            peopleData.missingFields.length > 0
-              ? ` Please fill remaining fields (${peopleData.missingFields.join(', ')}).`
-              : ''
-          }`
-        );
-      } else if (peopleData.importedFields.length > 0) {
-        setGoogleImportSuccess(
-          `Verified with Google People API (${peopleData.importedFields.join(', ')} already filled).`
-        );
-      } else {
-        setGoogleImportNotice(
-          'Your Google Account did not share Date of Birth, Address, or Gender details. Please enter them manually below.'
-        );
-      }
-    } catch (err: unknown) {
-      setGoogleImportNotice(
-        err instanceof Error
-          ? err.message
-          : 'Could not read details from Google People API. Please enter them manually.'
-      );
-    } finally {
-      setIsImportingGoogle(false);
+  // Load distinct Village / City options from member info for the active church
+  useEffect(() => {
+    const targetChurchId = scopedChurch?.id || selectedChurchId;
+    if (!targetChurchId) {
+      setVillageOptions([]);
+      return;
     }
-  };
 
-  // Automatically import from Google People API once per Google sign-in token
+    let isCancelled = false;
+
+    const loadChurchVillages = async () => {
+      if (!supabase) {
+        const previewDefaultsByChurch: Record<string, string[]> = {
+          'c1111111-1111-1111-1111-111111111111': [
+            'Guindy',
+            'Kallakurichi',
+            'Kallakurichi Old Town',
+            'Tambaram',
+            'Tambaram East',
+          ],
+          'c2222222-2222-2222-2222-222222222222': [
+            'Indiranagar',
+            'Koramangala',
+            'Whitefield',
+          ],
+        };
+        const previewVillages = previewDefaultsByChurch[targetChurchId] || [
+          'Guindy',
+          'Kallakurichi',
+          'Tambaram',
+          'Whitefield',
+        ];
+        if (!isCancelled) {
+          setVillageOptions(
+            buildVillageSuggestions([
+              ...previewVillages,
+              existingRequest?.church_id === targetChurchId ? existingRequest.village_name : null,
+            ])
+          );
+        }
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase.rpc('get_church_village_options', {
+          p_church_id: targetChurchId,
+        });
+
+        if (isCancelled) return;
+
+        if (!error && Array.isArray(data)) {
+          setVillageOptions(
+            buildVillageSuggestions([
+              ...(data as Array<string | null | undefined>),
+              existingRequest?.church_id === targetChurchId ? existingRequest.village_name : null,
+            ])
+          );
+        } else {
+          if (error) {
+            console.warn('Could not fetch church village options:', error);
+          }
+          setVillageOptions(
+            buildVillageSuggestions([
+              existingRequest?.church_id === targetChurchId ? existingRequest.village_name : null,
+            ])
+          );
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          console.warn('Error fetching church village options:', err);
+          setVillageOptions([]);
+        }
+      }
+    };
+
+    void loadChurchVillages();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [scopedChurch, selectedChurchId, existingRequest]);
+
+  // Align auto-filled village casing with canonical member village list if an exact match exists
+  useEffect(() => {
+    if (villageOptions.length === 0) return;
+    setVillageName((prev) => {
+      const cleaned = prev.trim().toLowerCase();
+      if (!cleaned) return prev;
+      const match = villageOptions.find((item) => item.toLowerCase() === cleaned);
+      return match && match !== prev ? match : prev;
+    });
+  }, [villageOptions]);
+
+  // Automatically import all available profile fields from Google People API once per token
   useEffect(() => {
     if (!googleProviderToken) return;
     if (autoImportedTokenRef.current === googleProviderToken) return;
 
     autoImportedTokenRef.current = googleProviderToken;
-    runPeopleApiImport(googleProviderToken, true);
-  }, [googleProviderToken]);
 
-  const handleReconnectGoogleScopes = async () => {
-    if (!supabase) return;
-    setIsImportingGoogle(true);
-    setGoogleImportNotice(null);
-    try {
-      const redirectTo = scopedChurch
-        ? buildChurchPortalUrl(window.location.origin, scopedChurch.slug)
-        : window.location.origin;
+    const autoImportFromGoogle = async () => {
+      try {
+        const peopleData = await fetchGooglePeopleProfile(googleProviderToken);
 
-      if (scopedChurch) {
-        persistScopedChurchSlug(scopedChurch.slug, true);
+        if (peopleData.fullName) {
+          setFullName((prev) => (prev.trim() ? prev : peopleData.fullName!));
+        }
+        if (peopleData.dateOfBirth) {
+          setDateOfBirth((prev) => prev || peopleData.dateOfBirth!);
+        }
+        if (peopleData.phoneNumber) {
+          setPhoneNumber((prev) => (prev.trim() ? prev : peopleData.phoneNumber!));
+        }
+        if (peopleData.gender) {
+          setGender((prev) => prev || peopleData.gender!);
+        }
+        if (peopleData.villageOrCity) {
+          setVillageName((prev) => (prev.trim() ? prev : peopleData.villageOrCity!));
+        }
+      } catch (err) {
+        console.warn('Default Google profile prefill notice:', err);
       }
+    };
 
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo,
-          scopes: GOOGLE_PEOPLE_SCOPES.join(' '),
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
-        },
-      });
-      if (error) throw error;
-    } catch (err: unknown) {
-      setGoogleImportNotice(
-        err instanceof Error ? err.message : 'Failed to reconnect with Google.'
-      );
-      setIsImportingGoogle(false);
-    }
-  };
-
-  // Manual "Fill available details from Google" button handler
-  const handleGooglePeopleImport = async () => {
-    if (!googleProviderToken) {
-      setGoogleImportSuccess(null);
-      setGoogleImportNotice(
-        'Google profile access token is not in the current session. Click "Reconnect Google" to grant People API permissions, or enter your details manually.'
-      );
-      return;
-    }
-    await runPeopleApiImport(googleProviderToken, false);
-  };
+    void autoImportFromGoogle();
+  }, [googleProviderToken]);
 
   // Save Incomplete Draft
   const handleSaveDraft = async () => {
@@ -583,46 +627,6 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
             )}
           </div>
 
-          {/* Google People API Profile Prefill */}
-          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2 text-slate-400">
-              <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
-              <span className="text-[11px]">
-                Import Name, Date of Birth, Village / City, and Gender via Google People API
-              </span>
-            </div>
-            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
-              <button
-                type="button"
-                onClick={handleGooglePeopleImport}
-                disabled={isImportingGoogle}
-                className="text-[11px] font-medium text-sky-400 hover:text-sky-300 disabled:opacity-50 bg-sky-500/10 hover:bg-sky-500/20 px-3 py-1.5 rounded-lg border border-sky-500/20 transition-colors cursor-pointer"
-              >
-                {isImportingGoogle ? 'Importing...' : 'Fill from Google'}
-              </button>
-              {!googleProviderToken && supabase && (
-                <button
-                  type="button"
-                  onClick={handleReconnectGoogleScopes}
-                  disabled={isImportingGoogle}
-                  className="text-[11px] font-medium text-emerald-300 hover:text-emerald-200 disabled:opacity-50 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg border border-emerald-500/20 transition-colors cursor-pointer"
-                >
-                  Reconnect Google
-                </button>
-              )}
-            </div>
-          </div>
-          {googleImportSuccess && (
-            <p className="text-[11px] text-emerald-300 bg-emerald-500/10 p-2.5 rounded-lg border border-emerald-500/20">
-              {googleImportSuccess}
-            </p>
-          )}
-          {googleImportNotice && (
-            <p className="text-[11px] text-amber-300/90 bg-amber-500/10 p-2.5 rounded-lg border border-amber-500/20">
-              {googleImportNotice}
-            </p>
-          )}
-
           {/* 3. Full Name */}
           <div>
             <label className="block text-slate-300 font-medium mb-1.5">
@@ -728,25 +732,29 @@ export const CompleteProfileScreen: React.FC<CompleteProfileScreenProps> = ({
 
           {/* 6. Village / City Name */}
           <div>
-            <label className="block text-slate-300 font-medium mb-1.5">
+            <label htmlFor="onboarding-village" className="block text-slate-300 font-medium mb-1.5">
               Village / City Name <span className="text-red-400">*</span>
             </label>
-            <div className="relative">
-              <MapPin className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-              <input
-                type="text"
-                value={villageName}
-                onChange={(e) => setVillageName(e.target.value)}
-                required
-                placeholder="e.g. Kallakurichi, Tambaram, or Whitefield"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
-              />
-            </div>
+            <VillageCityInput
+              id="onboarding-village"
+              value={villageName}
+              onChange={(val) => {
+                setVillageName(val);
+                if (errors.villageName) setErrors((prev) => ({ ...prev, villageName: '' }));
+              }}
+              suggestions={villageOptions}
+              onAddNewVillage={(newVillage) =>
+                setVillageOptions((prev) => buildVillageSuggestions([...prev, newVillage]))
+              }
+              required
+              hasError={Boolean(errors.villageName)}
+              placeholder="Select from member villages or type a new village / city..."
+            />
             {errors.villageName && (
               <p className="text-[11px] text-red-400 mt-1">{errors.villageName}</p>
             )}
             <p className="text-[10px] text-slate-500 mt-1">
-              Locality name used by church administration to identify branch and parish boundaries.
+              Select a locality from existing church member records or type a new village / city if not listed.
             </p>
           </div>
 

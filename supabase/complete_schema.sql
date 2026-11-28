@@ -4454,6 +4454,54 @@ GRANT EXECUTE ON FUNCTION public.update_receiving_account(UUID, TEXT, TEXT, TEXT
 REVOKE ALL ON FUNCTION public.toggle_receiving_account_status(UUID, BOOLEAN) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.toggle_receiving_account_status(UUID, BOOLEAN) TO authenticated;
 
+-- 11. GET CHURCH VILLAGE OPTIONS (Authenticated onboarding village lookup without member PII)
+CREATE OR REPLACE FUNCTION public.get_church_village_options(p_church_id UUID)
+RETURNS TEXT[]
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_church_active BOOLEAN;
+    v_villages TEXT[];
+BEGIN
+    IF auth.uid() IS NULL THEN
+        RAISE EXCEPTION 'Authentication required.';
+    END IF;
+
+    IF p_church_id IS NULL THEN
+        RETURN ARRAY[]::TEXT[];
+    END IF;
+
+    SELECT is_active INTO v_church_active FROM public.churches WHERE id = p_church_id;
+    IF v_church_active IS NULL OR NOT v_church_active THEN
+        RETURN ARRAY[]::TEXT[];
+    END IF;
+
+    SELECT COALESCE(
+        array_agg(village_clean ORDER BY lower(village_clean), village_clean),
+        ARRAY[]::TEXT[]
+    )
+    INTO v_villages
+    FROM (
+        SELECT DISTINCT ON (lower(clean_name)) clean_name AS village_clean
+        FROM (
+            SELECT btrim(regexp_replace(m.village_name, '\s+', ' ', 'g')) AS clean_name
+            FROM public.members m
+            WHERE m.church_id = p_church_id
+              AND m.village_name IS NOT NULL
+              AND length(btrim(m.village_name)) > 0
+        ) raw_villages
+        ORDER BY lower(clean_name), clean_name
+    ) deduped;
+
+    RETURN COALESCE(v_villages, ARRAY[]::TEXT[]);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_church_village_options(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_church_village_options(UUID) TO authenticated;
+
 -- ==============================================================================
 -- SECTION 7: BACKFILL PROFILES FOR EXISTING AUTH USERS (IF ANY REMAIN)
 -- ==============================================================================
