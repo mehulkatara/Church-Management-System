@@ -539,6 +539,17 @@ export function canManageStaffAssignmentStatus(
 }
 
 /**
+ * Only Platform Admins can interactively switch between active churches.
+ * All other roles stay scoped to their assigned church or dedicated /<slug> link.
+ */
+export function canSwitchActiveChurch(
+  actorRole: UserRole | 'none',
+  isPlatformAdmin = false
+): boolean {
+  return isPlatformAdmin || actorRole === 'platform_admin';
+}
+
+/**
  * Validates Gender values.
  * NULL means not provided and is distinct from 'prefer_not_to_say'.
  */

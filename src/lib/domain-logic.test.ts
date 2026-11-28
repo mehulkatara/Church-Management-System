@@ -29,6 +29,7 @@ import {
   canManageStaffAssignmentStatus,
   validateReceivingAccountInput,
   extractSupabaseErrorMessage,
+  canSwitchActiveChurch,
 } from './domain-logic';
 
 test('Financial Year boundary: 31 March falls into ending FY, 1 April falls into next FY', () => {
@@ -1023,4 +1024,16 @@ test('Supabase error extractor formats PostgrestError plain objects and RLS/JWT 
 
   assert.equal(extractSupabaseErrorMessage(new Error('Network down'), 'Fallback'), 'Network down');
   assert.equal(extractSupabaseErrorMessage(null, 'Fallback message'), 'Fallback message');
+});
+
+test('Only Platform Admin can switch active churches; all other roles are blocked', () => {
+  assert.equal(canSwitchActiveChurch('platform_admin', true), true);
+  assert.equal(canSwitchActiveChurch('platform_admin', false), true);
+  assert.equal(canSwitchActiveChurch('admin', true), true);
+
+  assert.equal(canSwitchActiveChurch('admin', false), false);
+  assert.equal(canSwitchActiveChurch('accountant', false), false);
+  assert.equal(canSwitchActiveChurch('collector', false), false);
+  assert.equal(canSwitchActiveChurch('member', false), false);
+  assert.equal(canSwitchActiveChurch('none', false), false);
 });

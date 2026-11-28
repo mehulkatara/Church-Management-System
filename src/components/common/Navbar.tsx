@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { getFinancialYear } from '../../lib/domain-logic';
+import { getFinancialYear, canSwitchActiveChurch } from '../../lib/domain-logic';
 import {
   Church as ChurchIcon,
   ChevronDown,
@@ -12,7 +12,6 @@ import {
   X,
   Building2,
   Check,
-  Lock,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -33,13 +32,13 @@ export const Navbar: React.FC<NavbarProps> = ({
     authorizedChurches,
     activeRole,
     isPlatformAdmin,
-    isChurchLocked,
     setActiveChurchId,
     signOut,
   } = useAuth();
 
   const [isChurchMenuOpen, setIsChurchMenuOpen] = useState(false);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const showChurchSwitcher = canSwitchActiveChurch(activeRole, isPlatformAdmin);
 
   const currentFY = getFinancialYear(new Date());
 
@@ -105,83 +104,74 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Center: Church Switcher (locked for members via church link; admins can switch) */}
-        <div className="relative">
-          {authorizedChurches.length > 0 ? (
-            isChurchLocked ? (
-              <div
-                title="Locked to this congregation's specific portal link"
-                className="flex items-center gap-2 bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200"
-              >
-                <Building2 className="w-4 h-4 text-sky-400 shrink-0" />
-                <span className="font-medium max-w-[140px] sm:max-w-[220px] truncate text-left">
-                  {activeChurch ? activeChurch.name : 'Assigned Church'}
-                </span>
-                <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              </div>
-            ) : (
+        {/* Center: Church Switcher (Platform Admin only; hidden for all other roles) */}
+        {showChurchSwitcher && (
+          <div className="relative">
+            {authorizedChurches.length > 0 ? (
               <div>
                 <button
+                  type="button"
                   onClick={() => setIsChurchMenuOpen(!isChurchMenuOpen)}
                   aria-haspopup="true"
                   aria-expanded={isChurchMenuOpen}
-                  className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 transition-colors"
+                  className="flex items-center gap-2 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Building2 className="w-4 h-4 text-sky-400 shrink-0" />
                   <span className="font-medium max-w-[140px] sm:max-w-[220px] truncate text-left">
                     {activeChurch ? activeChurch.name : 'Select Church'}
                   </span>
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 </button>
 
-              {isChurchMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setIsChurchMenuOpen(false)}
-                  />
-                  <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95">
-                    <div className="px-2.5 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                      Authorized Churches ({authorizedChurches.length})
+                {isChurchMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setIsChurchMenuOpen(false)}
+                    />
+                    <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1.5 z-50 animate-in fade-in zoom-in-95">
+                      <div className="px-2.5 py-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                        Authorized Churches ({authorizedChurches.length})
+                      </div>
+                      <div className="max-h-60 overflow-y-auto space-y-0.5">
+                        {authorizedChurches.map((church) => {
+                          const isSelected = activeChurch?.id === church.id;
+                          return (
+                            <button
+                              type="button"
+                              key={church.id}
+                              onClick={() => {
+                                setActiveChurchId(church.id);
+                                setIsChurchMenuOpen(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                                isSelected
+                                  ? 'bg-sky-500/15 text-sky-300 font-semibold border border-sky-500/30'
+                                  : 'text-slate-300 hover:bg-slate-800'
+                              }`}
+                            >
+                              <div className="truncate pr-2">
+                                <div className="truncate">{church.name}</div>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  Code: {church.code}
+                                </span>
+                              </div>
+                              {isSelected && <Check className="w-4 h-4 text-sky-400 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="max-h-60 overflow-y-auto space-y-0.5">
-                      {authorizedChurches.map((church) => {
-                        const isSelected = activeChurch?.id === church.id;
-                        return (
-                          <button
-                            key={church.id}
-                            onClick={() => {
-                              setActiveChurchId(church.id);
-                              setIsChurchMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-colors ${
-                              isSelected
-                                ? 'bg-sky-500/15 text-sky-300 font-semibold border border-sky-500/30'
-                                : 'text-slate-300 hover:bg-slate-800'
-                            }`}
-                          >
-                            <div className="truncate pr-2">
-                              <div className="truncate">{church.name}</div>
-                              <span className="text-[10px] text-slate-400 font-mono">
-                                Code: {church.code}
-                              </span>
-                            </div>
-                            {isSelected && <Check className="w-4 h-4 text-sky-400 shrink-0" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
               </div>
-            )
-          ) : (
-            <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-lg">
-              Pending Church Approval
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-lg">
+                No Active Churches
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Right: Badges & Profile Dropdown */}
         <div className="flex items-center gap-2 sm:gap-3">

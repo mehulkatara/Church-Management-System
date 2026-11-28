@@ -6,6 +6,7 @@ import {
   getHighestChurchRole,
   extractChurchSlugFromPath,
   buildChurchPortalUrl,
+  canSwitchActiveChurch,
 } from '../lib/domain-logic';
 import {
   DEFAULT_PREVIEW_CHURCHES,
@@ -797,15 +798,13 @@ export const AuthProvider: React.FC<{
     return getHighestChurchRole(approvedRoles);
   }, [isPlatformAdmin, activeChurch, churchAccessList]);
 
-  // Lock church switching when scoped via /<slug> during onboarding or for non-admin users (members, etc.); admins can switch
+  // Church switching is exclusively allowed for Platform Admins; other roles navigate via dedicated /<slug> links
   const isChurchLocked = useMemo<boolean>(() => {
-    if (!scopedChurch) return false;
-    if (isPlatformAdmin || activeRole === 'admin') return false;
-    return true;
-  }, [scopedChurch, isPlatformAdmin, activeRole]);
+    return !canSwitchActiveChurch(activeRole, isPlatformAdmin);
+  }, [activeRole, isPlatformAdmin]);
 
   const setActiveChurchId = (churchId: string) => {
-    if (isChurchLocked && scopedChurch && churchId !== scopedChurch.id) {
+    if (!canSwitchActiveChurch(activeRole, isPlatformAdmin)) {
       return;
     }
     const target = authorizedChurches.find((c) => c.id === churchId);
